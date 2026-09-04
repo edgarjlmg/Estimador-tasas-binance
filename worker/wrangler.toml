@@ -1,0 +1,11 @@
+name = "binance-p2p-cron-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-01"
+
+# Ejecución programada cada minuto (1.440 veces/día, dentro de la cuota gratis de 100.000/día)
+[triggers]
+crons = ["* * * * *"]
+
+# Variables públicas o placeholders (los secretos reales se suben con 'wrangler secret put')
+[vars]
+SUPABASE_URL = "https://TU_PROYECTO.supabase.co"
