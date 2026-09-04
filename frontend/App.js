@@ -228,10 +228,10 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          {/* Selector Horizontal de Métodos / Bancos */}
+          {/* Selector de Métodos / Bancos en cuadrícula visible */}
           <View style={styles.methodsWrapper}>
             <Text style={styles.sectionLabel}>Selecciona el Método o Banco:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.methodsScroll}>
+            <View style={styles.methodsGrid}>
               {PAY_METHODS.map((m) => {
                 const isSelected = selectedMethod === m.id;
                 return (
@@ -248,7 +248,7 @@ export default function App() {
                   </TouchableOpacity>
                 );
               })}
-            </ScrollView>
+            </View>
           </View>
 
           {/* Selector de Monto (Tiers) */}
@@ -452,17 +452,22 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  methodsScroll: {
-    paddingVertical: 2,
+  methodsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    width: '100%',
   },
   methodPill: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: '#131c2e',
     paddingVertical: 10,
-    paddingHorizontal: 14,
+    paddingHorizontal: 8,
     borderRadius: 12,
-    marginRight: 8,
+    width: '48.5%', // 2 columnas uniformes para que quepan todos los bancos (incluido Bancaribe y Provincial)
+    marginBottom: 8,
     borderWidth: 1.5,
     borderColor: '#1e293b',
   },
