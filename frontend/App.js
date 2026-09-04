@@ -38,6 +38,8 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [includePagoMovilFee, setIncludePagoMovilFee] = useState(true); // Opción para desglosar la comisión del Pago Móvil
   const [showComparison, setShowComparison] = useState(true); // Control desplegable de la comparativa de rentabilidad
+  const [showSignalStats, setShowSignalStats] = useState(false); // Desplegable de máximos y mínimos con sus horas
+  const [historicalTicks, setHistoricalTicks] = useState([]); // Historial de cotizaciones recientes para análisis de extremos
 
   // Conmutar selección múltiple de métodos
   const toggleMethod = (methodId) => {
@@ -59,21 +61,33 @@ export default function App() {
   // Consultar datos de Binance P2P para todos los métodos seleccionados simultáneamente
   const fetchAllMarketData = async () => {
     try {
-      const { data, error } = await supabase
-        .from('p2p_ticks')
-        .select('*')
-        .eq('trade_type', tradeType)
-        .order('created_at', { ascending: false })
-        .limit(20);
+      const [latestRes, historyRes] = await Promise.all([
+        supabase
+          .from('p2p_ticks')
+          .select('*')
+          .eq('trade_type', tradeType)
+          .order('created_at', { ascending: false })
+          .limit(40),
+        supabase
+          .from('p2p_ticks')
+          .select('rate_5usd, rate_20usd, rate_50usd, rate_100usd, rate_300usd, market_avg, pay_method, trade_type, created_at')
+          .eq('trade_type', tradeType)
+          .order('created_at', { ascending: false })
+          .limit(200)
+      ]);
 
-      if (!error && data) {
+      if (!latestRes.error && latestRes.data) {
         const latestByMethod = {};
-        data.forEach((item) => {
+        latestRes.data.forEach((item) => {
           if (!latestByMethod[item.pay_method]) {
             latestByMethod[item.pay_method] = item;
           }
         });
         setMethodsData(latestByMethod);
+      }
+
+      if (!historyRes.error && historyRes.data) {
+        setHistoricalTicks(historyRes.data);
       }
     } catch (err) {
       console.warn('Error consultando métodos:', err.message);
@@ -278,6 +292,58 @@ export default function App() {
 
   const signalState = getSevenStateSignal();
 
+  // Cálculo de Máximos y Mínimos con sus horas para el método y monto actual
+  const getMethodHistoricalStats = () => {
+    // Filtrar ticks que coincidan con el método actual (o todos si no hay suficientes)
+    const matchingTicks = historicalTicks.filter((t) => t.pay_method === activeTabMethod);
+    const pool = matchingTicks.length >= 5 ? matchingTicks : historicalTicks;
+
+    if (!pool || pool.length === 0) {
+      return null;
+    }
+
+    let minItem = null;
+    let maxItem = null;
+    const key = tierKey;
+
+    pool.forEach((item) => {
+      const val = Number(item[key] || item.market_avg || 0);
+      if (val > 0) {
+        if (!minItem || val < minItem.val) {
+          minItem = { val, created_at: item.created_at };
+        }
+        if (!maxItem || val > maxItem.val) {
+          maxItem = { val, created_at: item.created_at };
+        }
+      }
+    });
+
+    const formatHour = (isoStr) => {
+      if (!isoStr) return '--:--';
+      try {
+        const d = new Date(isoStr);
+        return d.toLocaleTimeString('es-VE', {
+          timeZone: 'America/Caracas',
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: true
+        });
+      } catch (e) {
+        return '--:--';
+      }
+    };
+
+    return {
+      minRate: minItem ? minItem.val : currentRate,
+      minHour: minItem ? formatHour(minItem.created_at) : '--:--',
+      maxRate: maxItem ? maxItem.val : currentRate,
+      maxHour: maxItem ? formatHour(maxItem.created_at) : '--:--',
+      totalSamples: pool.length
+    };
+  };
+
+  const methodStats = getMethodHistoricalStats();
+
   // Encontrar el método más rentable de los seleccionados
   const rankedMethods = selectedMethods
     .map((mId) => {
@@ -469,15 +535,81 @@ export default function App() {
           {/* 🚦 Semáforo Predictivo de 7 Estados */}
           <View style={[styles.signalCard, { backgroundColor: signalState.bg, borderColor: signalState.border }]}>
             <View style={styles.signalTopRow}>
-              <View style={[styles.signalDot, { backgroundColor: signalState.text }]} />
-              <Text style={[styles.signalTagText, { color: signalState.text }]}>
-                {signalState.tag}
-              </Text>
+              <View style={styles.signalTitleGroup}>
+                <View style={[styles.signalDot, { backgroundColor: signalState.text }]} />
+                <Text style={[styles.signalTagText, { color: signalState.text }]}>
+                  {signalState.tag}
+                </Text>
+              </View>
+
+              {/* Botón desplegable para ver máximos y mínimos con sus horas */}
+              <TouchableOpacity
+                style={styles.signalDropdownBtn}
+                onPress={() => setShowSignalStats(!showSignalStats)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.signalDropdownBtnText}>
+                  {showSignalStats ? 'Ocultar horas ▲' : 'Ver máx/mín ▼'}
+                </Text>
+              </TouchableOpacity>
             </View>
+
             <Text style={styles.signalDescriptionText}>{signalState.desc}</Text>
+
             <View style={styles.meterTrack}>
               <View style={[styles.meterFill, { width: signalState.barPct, backgroundColor: signalState.border }]} />
             </View>
+
+            {/* Desplegable interactivo: Récords de Máximos y Mínimos con Horas exactas */}
+            {showSignalStats && methodStats && (
+              <View style={styles.signalExtremesBox}>
+                <Text style={styles.signalExtremesTitle}>
+                  📊 MOVIMIENTOS Y EXTREMOS REGISTRADOS HOY ({PAY_METHODS.find((m) => m.id === activeTabMethod)?.label} - ${selectedTier}):
+                </Text>
+
+                <View style={styles.signalExtremesGrid}>
+                  {/* Tarjeta de Tasa Mínima */}
+                  <View style={[styles.extremeCard, styles.extremeCardMin]}>
+                    <View style={styles.extremeCardHeader}>
+                      <Text style={styles.extremeIcon}>📉</Text>
+                      <Text style={styles.extremeLabelMin}>TASA MÍNIMA</Text>
+                    </View>
+                    <Text style={styles.extremePrice}>
+                      {Number(methodStats.minRate).toFixed(2)}{' '}
+                      <Text style={styles.extremeUnit}>Bs</Text>
+                    </Text>
+                    <View style={styles.extremeTimeBadge}>
+                      <Text style={styles.extremeTimeText}>⏰ Registrada: {methodStats.minHour}</Text>
+                    </View>
+                    <Text style={styles.extremeHint}>
+                      {tradeType === 'BUY'
+                        ? '🔥 La mejor oportunidad de compra del ciclo.'
+                        : '⚠️ El precio más bajo ofrecido a vendedores.'}
+                    </Text>
+                  </View>
+
+                  {/* Tarjeta de Tasa Máxima */}
+                  <View style={[styles.extremeCard, styles.extremeCardMax]}>
+                    <View style={styles.extremeCardHeader}>
+                      <Text style={styles.extremeIcon}>📈</Text>
+                      <Text style={styles.extremeLabelMax}>TASA MÁXIMA</Text>
+                    </View>
+                    <Text style={styles.extremePrice}>
+                      {Number(methodStats.maxRate).toFixed(2)}{' '}
+                      <Text style={styles.extremeUnit}>Bs</Text>
+                    </Text>
+                    <View style={styles.extremeTimeBadge}>
+                      <Text style={styles.extremeTimeText}>⏰ Registrada: {methodStats.maxHour}</Text>
+                    </View>
+                    <Text style={styles.extremeHint}>
+                      {tradeType === 'BUY'
+                        ? '⚠️ El precio más caro cobrado a compradores.'
+                        : '🔥 La mejor oportunidad de venta del ciclo.'}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
           </View>
 
           {/* ⏰ Tarjeta Guía Horaria del Mercado y BCV */}
@@ -972,7 +1104,13 @@ const styles = StyleSheet.create({
   signalTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 6,
+  },
+  signalTitleGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   signalDot: {
     width: 12,
@@ -984,6 +1122,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '900',
     letterSpacing: 0.4,
+  },
+  signalDropdownBtn: {
+    backgroundColor: 'rgba(15, 23, 42, 0.65)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.15)',
+    marginLeft: 8,
+  },
+  signalDropdownBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
   signalDescriptionText: {
     color: '#f8fafc',
@@ -1001,6 +1154,91 @@ const styles = StyleSheet.create({
   meterFill: {
     height: '100%',
     borderRadius: 3,
+  },
+  signalExtremesBox: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.15)',
+    width: '100%',
+  },
+  signalExtremesTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#f8fafc',
+    letterSpacing: 0.4,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  signalExtremesGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  extremeCard: {
+    flex: 1,
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1.5,
+  },
+  extremeCardMin: {
+    backgroundColor: '#062d22',
+    borderColor: '#10b981',
+  },
+  extremeCardMax: {
+    backgroundColor: '#3b0d0c',
+    borderColor: '#ef4444',
+  },
+  extremeCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  extremeIcon: {
+    fontSize: 14,
+    marginRight: 5,
+  },
+  extremeLabelMin: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#34d399',
+    letterSpacing: 0.4,
+  },
+  extremeLabelMax: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#f87171',
+    letterSpacing: 0.4,
+  },
+  extremePrice: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: '#ffffff',
+    marginVertical: 2,
+  },
+  extremeUnit: {
+    fontSize: 12,
+    color: '#cbd5e1',
+    fontWeight: '700',
+  },
+  extremeTimeBadge: {
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: 4,
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    marginVertical: 4,
+    alignSelf: 'flex-start',
+  },
+  extremeTimeText: {
+    color: '#f8fafc',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  extremeHint: {
+    color: '#cbd5e1',
+    fontSize: 10,
+    lineHeight: 13,
+    marginTop: 2,
   },
   timingCard: {
     width: '100%',
