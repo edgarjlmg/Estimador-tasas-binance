@@ -36,6 +36,8 @@ export default function App() {
   const [bcvData, setBcvData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastDataTime, setLastDataTime] = useState(Date.now()); // Marca de tiempo del último dato recibido
+  const [secondsAgo, setSecondsAgo] = useState(0); // Segundos transcurridos desde la última tasa capturada en vivo
   const [includePagoMovilFee, setIncludePagoMovilFee] = useState(true); // Opción para desglosar la comisión del Pago Móvil
   const [showComparison, setShowComparison] = useState(true); // Control desplegable de la comparativa de rentabilidad
   const [showSignalStats, setShowSignalStats] = useState(false); // Desplegable de máximos y mínimos con sus horas
@@ -86,6 +88,7 @@ export default function App() {
           }
         });
         setMethodsData(latestByMethod);
+        setLastDataTime(Date.now());
       }
 
       if (!historyRes.error && historyRes.data) {
@@ -98,6 +101,14 @@ export default function App() {
       setIsRefreshing(false);
     }
   };
+
+  // Cronómetro de segundos transcurridos en vivo
+  useEffect(() => {
+    const secTimer = setInterval(() => {
+      setSecondsAgo(Math.max(0, Math.floor((Date.now() - lastDataTime) / 1000)));
+    }, 1000);
+    return () => clearInterval(secTimer);
+  }, [lastDataTime]);
 
   // Consultar tasas oficiales BCV (Dólar y Euro)
   const fetchBcvRates = async () => {
@@ -156,6 +167,7 @@ export default function App() {
               ...prev,
               [payload.new.pay_method]: payload.new
             }));
+            setLastDataTime(Date.now());
           }
         }
       )
@@ -393,6 +405,12 @@ export default function App() {
           <View style={styles.header}>
             <Text style={styles.brandTitle}>Monitor Predictivo P2P</Text>
             <Text style={styles.brandSubtitle}>Inteligencia Cambiaria VES / USDT • BCV en Tiempo Real</Text>
+            <View style={styles.liveIndicatorRow}>
+              <View style={styles.liveGreenDot} />
+              <Text style={styles.liveIndicatorText}>
+                SINCRONIZADO EN VIVO CON BINANCE P2P • Hace {secondsAgo}s
+              </Text>
+            </View>
           </View>
 
           {/* Selector de Modo: COMPRAR vs VENDER */}
@@ -1727,5 +1745,30 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  liveIndicatorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+    paddingVertical: 4,
+    paddingHorizontal: 12,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+    alignSelf: 'center',
+  },
+  liveGreenDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#10b981',
+    marginRight: 6,
+  },
+  liveIndicatorText: {
+    fontSize: 10,
+    color: '#34d399',
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
 });
