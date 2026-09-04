@@ -6,50 +6,54 @@
 
 ---
 
-## 2. Decisiones de Negocio y Reglas Actualizadas
+## 2. Decisiones de Negocio y Reglas Técnicas
 1. **Criterio de Anuncios:**
-   - **Sin filtro estricto de reputación:** Se toma directamente la **mejor tasa disponible** (primer anuncio que cumpla con los límites del monto a cambiar: saldo disponible en USDT >= monto y min_ves <= total_ves <= max_ves), sin restringir por `finishRate` ni `orderCount`. El objetivo es reflejar la tasa real más competitiva del libro de órdenes en cada momento.
+   - **Sin filtro de reputación:** Se toma directamente la **mejor tasa disponible** (primer anuncio que cumpla con los límites del monto a cambiar: saldo disponible en USDT >= monto y min_ves <= total_ves <= max_ves).
 2. **Métodos de Pago Soportados:**
-   - `PagoMovil`
-   - `Banesco`
-   - `BancoDeVenezuela`
-   - `Mercantil`
-   - `BNC`
-   - `Bancaribe`
-3. **Plataforma de Ejecución del Cron / Extractor:**
-   - Se evaluó y comprobó compatibilidad con **Cloudflare Workers** (Cron Triggers `* * * * *` cada 60s, 100% Free Tier, sin costo de servidor, con fetch directo a la API de Binance).
-   - Alternativa disponible: Extractor en Node.js o Python con script de fondo para pruebas locales.
-4. **Almacenamiento y Lógica de Señal:**
-   - **Supabase (PostgreSQL Free Tier):** Tabla `p2p_ticks` y función RPC `get_market_signal`.
-5. **Frontend Universal:**
-   - Expo (React Native Web) con diseño responsivo (`maxWidth: 480px` en Web) y compilación nativa APK Android (`eas build`).
+   - `PagoMovil`, `Banesco`, `BancoDeVenezuela`, `Mercantil`, `BNC`, `Bancaribe`.
+3. **Límite de la API P2P de Binance:**
+   - La API de Binance retorna error de código `000002` si se solicita `rows: 30` o `rows: 25`. El límite óptimo y estable comprobado es **`rows: 20`**, el cual retorna las 20 mejores órdenes de forma confiable.
+4. **Extractor Costo Cero:**
+   - **Cloudflare Workers** con Cron Trigger `* * * * *` (1 ejecución cada 60s = 1.440/día, dentro de las 100.000 gratuitas diarias).
+   - Incluye ejecutor de prueba local en Node.js (`worker/local-runner.js`).
+5. **Base de Datos:**
+   - **Supabase (PostgreSQL):** Tabla `p2p_ticks` y función RPC `get_market_signal` con índices de fecha descendente y seguridad RLS.
+6. **Frontend Universal:**
+   - Expo SDK con React Native Web, exportación a estático Web (`dist/`) lista para Vercel y compilación de APK Android (`eas.json`).
 
 ---
 
-## 3. Entorno de Desarrollo Detectado
-- **Node.js:** v24.19.0 (Listo)
-- **Python:** 3.11.7 (Listo)
-- **Git:** No inicializado localmente en la carpeta actual aún.
-
----
-
-## 4. Estructura de Proyecto Acordada
+## 3. Estructura Limpia del Proyecto (Monorepo)
 ```text
-/
-├── .github/workflows/          # CI/CD y automatizaciones
-├── worker/                     # Cloudflare Worker (Cron Trigger cada 60s -> Supabase)
-├── backend-local/              # Script local opcional de prueba (Node.js/Python)
-├── supabase/                   # DDL, migraciones y RPC (schema.sql)
-├── frontend/                   # Aplicación Expo Universal (Web + Android APK)
-├── CONTEXTO_PROYECTO.md        # Bitácora continua de decisiones y arquitectura
-└── PLAN_IMPLEMENTACION_BINANCE_P2P_ALERTAS.md
+App_Estimador_p2p/
+├── .gitignore
+├── README.md
+├── CONTEXTO_PROYECTO.md
+├── PLAN_IMPLEMENTACION_BINANCE_P2P_ALERTAS.md
+├── supabase/
+│   ├── schema.sql              # Creación de tabla p2p_ticks, RLS, índices y RPC get_market_signal
+│   └── seed_test.sql           # Datos simulados para pruebas
+├── worker/
+│   ├── wrangler.toml           # Configuración de Cloudflare Worker y Cron Triggers (* * * * *)
+│   ├── package.json
+│   ├── local-runner.js         # Prueba directa sin dependencias
+│   └── src/
+│       └── index.ts            # Lógica serverless: fetch a Binance P2P + inserción en Supabase
+└── frontend/
+    ├── App.js                  # Componente universal reactivo con semáforo, calculadora y tiers
+    ├── app.json                # Configuración Expo
+    ├── eas.json                # Configuración EAS build para APK local
+    ├── .env.example
+    └── package.json
 ```
 
 ---
 
-## 5. Historial de Decisiones y Avances (Bitácora)
+## 4. Estado de Implementación (Bitácora)
 - **2026-09-04:**
-  - Verificado entorno: Node.js v24.19.0 y Python 3.11.7 disponibles.
-  - Comprobado que la API P2P de Binance responde directamente a llamadas estándar JSON con múltiples métodos de pago (`PagoMovil`, `Banesco`, `BancoDeVenezuela`, `Mercantil`, `BNC`, `Bancaribe`).
-  - Confirmado Cloudflare Workers como solución idónea costo cero para el cron de 60s.
-  - Regla de filtrado ajustada: evaluación del mejor precio sin filtro de comerciante verificado.
+  - Estructurado esquema SQL en [`supabase/schema.sql`](supabase/schema.sql) con RPC de cálculo de semáforo.
+  - Implementado Cloudflare Worker en TypeScript con Cron Trigger de 60s en [`worker/src/index.ts`](worker/src/index.ts).
+  - Creado runner local [`worker/local-runner.js`](worker/local-runner.js); validado con tasas reales de Binance P2P.
+  - Inicializado y configurado frontend Expo universal en [`frontend/App.js`](frontend/App.js).
+  - Probada compilación estática web (`npx expo export --platform web`) generando bundle exitosamente en `frontend/dist/`.
+  - Inicializado repositorio Git y creado primer commit estructurado.
