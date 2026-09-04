@@ -8,4 +8,4 @@ crons = ["* * * * *"]
 
 # Variables públicas o placeholders (los secretos reales se suben con 'wrangler secret put')
 [vars]
-SUPABASE_URL = "https://TU_PROYECTO.supabase.co"
+SUPABASE_URL = "https://oupmnztfysiexhgcgcny.supabase.co"
