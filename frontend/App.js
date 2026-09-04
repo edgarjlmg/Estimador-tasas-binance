@@ -313,6 +313,35 @@ export default function App() {
                   : '---'}{' '}
                 <Text style={styles.currencyBs}>Bs.</Text>
               </Text>
+
+              {/* Lista de los primeros comerciantes reales de Binance */}
+              {marketData?.top_traders && marketData.top_traders.length > 0 && (
+                <View style={styles.tradersContainer}>
+                  <Text style={styles.tradersTitle}>
+                    🥇 MEJORES OFERTAS EN VIVO PARA ${selectedTier}:
+                  </Text>
+                  {marketData.top_traders.map((t, idx) => (
+                    <View key={idx} style={[styles.traderRow, idx === 0 && styles.traderRowFirst]}>
+                      <View style={styles.traderInfo}>
+                        <Text style={[styles.traderRank, idx === 0 && styles.traderRankFirst]}>
+                          #{idx + 1}
+                        </Text>
+                        <View>
+                          <Text style={[styles.traderName, idx === 0 && styles.traderNameFirst]}>
+                            {t.nickName}
+                          </Text>
+                          <Text style={styles.traderOrders}>
+                            {t.orders} órdenes • {t.finishRate}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.traderPrice, idx === 0 && styles.traderPriceFirst]}>
+                        {Number(t.price).toFixed(2)} Bs
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              )}
             </View>
           )}
 
@@ -686,5 +715,71 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
+  },
+  tradersContainer: {
+    width: '100%',
+    marginTop: 16,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#1e293b',
+  },
+  tradersTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#38bdf8',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+    textAlign: 'center',
+  },
+  traderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#0f172a',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  traderRowFirst: {
+    borderColor: '#0284c7',
+    backgroundColor: '#0c1e38',
+  },
+  traderInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  traderRank: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    marginRight: 8,
+  },
+  traderRankFirst: {
+    color: '#38bdf8',
+  },
+  traderName: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  traderNameFirst: {
+    color: '#f8fafc',
+  },
+  traderOrders: {
+    color: '#64748b',
+    fontSize: 10,
+  },
+  traderPrice: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  traderPriceFirst: {
+    color: '#38bdf8',
+    fontSize: 14,
+    fontWeight: '900',
   },
 });

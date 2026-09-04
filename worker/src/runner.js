@@ -1,6 +1,5 @@
 const TARGET_AMOUNTS = [5, 20, 50, 100, 300];
 
-// Métodos de pago independientes admitidos en Binance P2P VES
 const PAY_METHODS = [
   { id: 'PagoMovil', name: 'Pago Móvil' },
   { id: 'BancoDeVenezuela', name: 'Banco de Venezuela' },
@@ -19,8 +18,11 @@ if (!SERVICE_KEY) {
   process.exit(1);
 }
 
+// Tasa aproximada de referencia en memoria para convertir USD a VES al consultar la API
+let lastKnownRate = 966.0;
+
 /**
- * Consulta la API de dolarvzla.com para sincronizar las tasas del Banco Central de Venezuela (USD y EUR)
+ * Sincronizar tasas oficiales de BCV y Euro
  */
 async function syncBcvRates() {
   try {
@@ -52,7 +54,6 @@ async function syncBcvRates() {
           },
           body: JSON.stringify(record)
         });
-        console.log(`[BCV] Tasas sincronizadas: USD = ${record.rate_usd} Bs | EUR = ${record.rate_eur} Bs`);
       }
     }
   } catch (err) {
@@ -61,69 +62,81 @@ async function syncBcvRates() {
 }
 
 /**
- * Sondea y guarda ticks de un método y tipo de comercio en particular
+ * Sondea y guarda ticks EXACTOS con transAmount filtrado por cada monto
  */
 async function fetchAndStoreP2P(methodId, tradeType) {
   try {
-    const payload = {
-      asset: 'USDT',
-      fiat: 'VES',
-      merchantCheck: false,
-      page: 1,
-      payTypes: [methodId],
-      publisherType: null,
-      rows: 20,
-      tradeType: tradeType // 'BUY' (para comprar USDT con Bs) o 'SELL' (para vender USDT por Bs)
-    };
-
-    const response = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) return;
-
-    const json = await response.json();
-    const rawAds = json.data || [];
-
-    const parsedAds = rawAds
-      .map(item => ({
-        price: parseFloat(item.adv.price),
-        minVes: parseFloat(item.adv.minSingleTransAmount),
-        maxVes: parseFloat(item.adv.dynamicMaxSingleTransAmount || item.adv.maxSingleTransAmount),
-        surplusUsdt: parseFloat(item.adv.surplusAmount)
-      }))
-      .filter(a => a.price > 0 && !isNaN(a.price));
-
-    if (parsedAds.length === 0) return;
-
-    // Si es BUY: el comprador busca pagar el menor precio (orden ascendente)
-    // Si es SELL: el vendedor busca recibir el mayor precio (orden descendente)
-    if (tradeType === 'BUY') {
-      parsedAds.sort((a, b) => a.price - b.price);
-    } else {
-      parsedAds.sort((a, b) => b.price - a.price);
-    }
-
-    const top5 = parsedAds.slice(0, 5);
-    const marketAvg = top5.reduce((sum, a) => sum + a.price, 0) / top5.length;
-
     const tierResults = {};
+    const topTradersMap = {};
+    let allPrices = [];
+
+    // Consultamos por cada monto objetivo enviando transAmount exactamente como la app de Binance
     for (const usd of TARGET_AMOUNTS) {
-      let matched = null;
-      for (const ad of parsedAds) {
-        const requiredVes = usd * ad.price;
-        if (ad.surplusUsdt >= usd && requiredVes >= ad.minVes && requiredVes <= ad.maxVes) {
-          matched = ad.price;
-          break;
-        }
+      const estimatedVes = Math.round(usd * lastKnownRate);
+
+      const payload = {
+        asset: 'USDT',
+        fiat: 'VES',
+        merchantCheck: false,
+        page: 1,
+        payTypes: [methodId],
+        publisherType: null,
+        rows: 10,
+        tradeType: tradeType,
+        transAmount: String(estimatedVes) // Clave para obtener los anuncios reales y eliminar órdenes mayoristas incompatibles
+      };
+
+      const response = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) continue;
+
+      const json = await response.json();
+      const rawAds = json.data || [];
+
+      // Filtrar anuncios activos
+      const qualified = rawAds
+        .map(item => ({
+          nickName: item.advertiser?.nickName || 'Comerciante',
+          monthOrderCount: item.advertiser?.monthOrderCount || 0,
+          finishRate: Math.round(((item.advertiser?.monthFinishRate ?? item.advertiser?.finishRate) || 0) * 100),
+          price: parseFloat(item.adv.price),
+          minVes: parseFloat(item.adv.minSingleTransAmount),
+          maxVes: parseFloat(item.adv.dynamicMaxSingleTransAmount || item.adv.maxSingleTransAmount),
+          surplusUsdt: parseFloat(item.adv.surplusAmount)
+        }))
+        .filter(a => a.price > 0 && !isNaN(a.price));
+
+      if (qualified.length > 0) {
+        // En BUY el primer anuncio de Binance es la tasa más baja que acepta ese monto
+        // En SELL el primer anuncio de Binance es la tasa más alta que paga por ese monto
+        const bestAd = qualified[0];
+        tierResults[`rate_${usd}usd`] = bestAd.price;
+        lastKnownRate = bestAd.price;
+        allPrices.push(bestAd.price);
+
+        // Guardamos los 3 primeros comerciantes para este monto
+        topTradersMap[`${usd}usd`] = qualified.slice(0, 3).map(t => ({
+          nickName: t.nickName,
+          price: t.price,
+          orders: t.monthOrderCount,
+          finishRate: `${t.finishRate}%`
+        }));
+      } else {
+        tierResults[`rate_${usd}usd`] = lastKnownRate;
+        topTradersMap[`${usd}usd`] = [];
       }
-      tierResults[`rate_${usd}usd`] = matched ?? parsedAds[0].price;
     }
+
+    if (allPrices.length === 0) return;
+
+    const marketAvg = allPrices.reduce((s, p) => s + p, 0) / allPrices.length;
 
     const record = {
       trade_type: tradeType,
@@ -134,10 +147,11 @@ async function fetchAndStoreP2P(methodId, tradeType) {
       rate_100usd: Number(tierResults.rate_100usd.toFixed(4)),
       rate_300usd: Number(tierResults.rate_300usd.toFixed(4)),
       market_avg: Number(marketAvg.toFixed(4)),
-      valid_ads_count: parsedAds.length
+      valid_ads_count: allPrices.length,
+      top_traders: topTradersMap
     };
 
-    await fetch(`${SUPABASE_URL}/rest/v1/p2p_ticks`, {
+    const postRes = await fetch(`${SUPABASE_URL}/rest/v1/p2p_ticks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -148,22 +162,22 @@ async function fetchAndStoreP2P(methodId, tradeType) {
       body: JSON.stringify(record)
     });
 
+    if (postRes.ok) {
+      const top1 = topTradersMap['100usd'] && topTradersMap['100usd'][0] ? topTradersMap['100usd'][0].nickName : 'N/A';
+      console.log(`[P2P] ${methodId} (${tradeType}): $100 = ${record.rate_100usd} Bs (Primero: ${top1})`);
+    }
+
   } catch (err) {
     console.error(`[P2P] Error procesando ${methodId} (${tradeType}):`, err.message);
   }
 }
 
-/**
- * Ciclo general de sondeo: recorre cada método de pago tanto en BUY como en SELL
- */
 async function runAllCycles() {
   const t0 = Date.now();
-  console.log(`[${new Date().toISOString()}] Ejecutando ciclo de sondeo Binance P2P & BCV...`);
+  console.log(`[${new Date().toISOString()}] Ejecutando ciclo de sondeo exacto Binance P2P & BCV...`);
 
-  // 1. Sincronizar BCV cada ciclo
   await syncBcvRates();
 
-  // 2. Sondear cada método por separado para COMPRAR y para VENDER
   for (const m of PAY_METHODS) {
     await fetchAndStoreP2P(m.id, 'BUY');
     await fetchAndStoreP2P(m.id, 'SELL');
@@ -173,6 +187,6 @@ async function runAllCycles() {
   console.log(`[${new Date().toISOString()}] Ciclo completado en ${elapsed}s.`);
 }
 
-console.log('Iniciando Extractor V2 Multi-Método y BUY/SELL (cada 60 segundos)...');
+console.log('Iniciando Extractor V3 con transAmount exacto y Top 3 comerciantes...');
 runAllCycles();
 setInterval(runAllCycles, 60000);
