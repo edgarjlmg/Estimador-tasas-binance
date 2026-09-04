@@ -138,12 +138,33 @@ export default function App() {
     setLoading(true);
     fetchAllMarketData();
 
+    // Actualización periódica cada 30 segundos
     const interval = setInterval(() => {
       fetchAllMarketData();
       fetchBcvRates();
-    }, 60000);
+    }, 30000);
 
-    return () => clearInterval(interval);
+    // Suscripción Realtime a Supabase: se actualiza al instante en cuanto el extractor guarda un tick
+    const channel = supabase
+      .channel('schema-p2p-changes')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'p2p_ticks' },
+        (payload) => {
+          if (payload.new && payload.new.trade_type === tradeType) {
+            setMethodsData((prev) => ({
+              ...prev,
+              [payload.new.pay_method]: payload.new
+            }));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      clearInterval(interval);
+      supabase.removeChannel(channel);
+    };
   }, [selectedTier, tradeType]);
 
   const handleRefresh = () => {
