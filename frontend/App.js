@@ -37,6 +37,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [includePagoMovilFee, setIncludePagoMovilFee] = useState(true); // Opción para desglosar la comisión del Pago Móvil
+  const [showComparison, setShowComparison] = useState(true); // Control desplegable de la comparativa de rentabilidad
 
   // Conmutar selección múltiple de métodos
   const toggleMethod = (methodId) => {
@@ -181,6 +182,12 @@ export default function App() {
   const currentRate = Number(currentMethodRecord?.[tierKey] || currentMethodRecord?.market_avg || 0);
   const tierNumber = Number(selectedTier);
   const baseTotalBs = currentRate * tierNumber;
+
+  // Lista de los 3 mejores comerciantes para el tier y método activo
+  const activeTopTraders =
+    currentMethodRecord?.top_traders?.[`${selectedTier}usd`] ||
+    currentMethodRecord?.top_traders?.[tierKey] ||
+    [];
 
   // Cálculo de comisiones bancarias para Pago Móvil (0.3% del monto transferido)
   const isPagoMovil = activeTabMethod === 'PagoMovil';
@@ -363,61 +370,77 @@ export default function App() {
           {/* Cuadro Comparativo de Rentabilidad entre los bancos elegidos */}
           {selectedMethods.length > 1 && (
             <View style={styles.comparisonBox}>
-              <Text style={styles.comparisonTitle}>
-                ⚖️ COMPARATIVA DE RENTABILIDAD PARA ${selectedTier}:
-              </Text>
-              <Text style={styles.comparisonSubtitle}>
-                {tradeType === 'BUY'
-                  ? 'Te conviene el método con menor desembolso total en Bs:'
-                  : 'Te conviene el método donde recibes más Bolívares:'}
-              </Text>
-
-              <View style={styles.comparisonTable}>
-                {rankedMethods.map((item, idx) => {
-                  const mInfo = PAY_METHODS.find((p) => p.id === item.id);
-                  const isFirst = idx === 0;
-                  const isPM = item.id === 'PagoMovil';
-                  const isCurrentTab = activeTabMethod === item.id;
-
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[
-                        styles.compRow,
-                        isFirst && styles.compRowWinner,
-                        isCurrentTab && styles.compRowSelected
-                      ]}
-                      onPress={() => setActiveTabMethod(item.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.compLeft}>
-                        <Text style={styles.compIcon}>{mInfo?.icon}</Text>
-                        <View>
-                          <View style={styles.compTitleRow}>
-                            <Text style={[styles.compName, isFirst && styles.compNameWinner]}>
-                              {mInfo?.label}
-                            </Text>
-                            {isFirst && <Text style={styles.winnerBadge}>🏆 RECOMENDADO</Text>}
-                          </View>
-                          <Text style={styles.compRateSub}>
-                            Tasa: {item.rate.toFixed(2)} Bs
-                            {isPM && includePagoMovilFee ? ' (+0.3% com.)' : ''}
-                          </Text>
-                        </View>
-                      </View>
-
-                      <View style={styles.compRight}>
-                        <Text style={[styles.compTotal, isFirst && styles.compTotalWinner]}>
-                          {item.netTotal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
-                        </Text>
-                        <Text style={styles.viewDetailsHint}>
-                          {isCurrentTab ? '• Viendo detalles •' : 'Tocar para ver'}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
+              <View style={styles.comparisonHeaderRow}>
+                <Text style={styles.comparisonTitle}>
+                  ⚖️ COMPARATIVA DE RENTABILIDAD PARA ${selectedTier}:
+                </Text>
+                <TouchableOpacity
+                  style={styles.comparisonToggleBtn}
+                  onPress={() => setShowComparison(!showComparison)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.comparisonToggleBtnText}>
+                    {showComparison ? 'Ocultar ▲' : 'Desplegar ▼'}
+                  </Text>
+                </TouchableOpacity>
               </View>
+
+              {showComparison && (
+                <>
+                  <Text style={styles.comparisonSubtitle}>
+                    {tradeType === 'BUY'
+                      ? 'Te conviene el método con menor desembolso total en Bs:'
+                      : 'Te conviene el método donde recibes más Bolívares:'}
+                  </Text>
+
+                  <View style={styles.comparisonTable}>
+                    {rankedMethods.map((item, idx) => {
+                      const mInfo = PAY_METHODS.find((p) => p.id === item.id);
+                      const isFirst = idx === 0;
+                      const isPM = item.id === 'PagoMovil';
+                      const isCurrentTab = activeTabMethod === item.id;
+
+                      return (
+                        <TouchableOpacity
+                          key={item.id}
+                          style={[
+                            styles.compRow,
+                            isFirst && styles.compRowWinner,
+                            isCurrentTab && styles.compRowSelected
+                          ]}
+                          onPress={() => setActiveTabMethod(item.id)}
+                          activeOpacity={0.7}
+                        >
+                          <View style={styles.compLeft}>
+                            <Text style={styles.compIcon}>{mInfo?.icon}</Text>
+                            <View>
+                              <View style={styles.compTitleRow}>
+                                <Text style={[styles.compName, isFirst && styles.compNameWinner]}>
+                                  {mInfo?.label}
+                                </Text>
+                                {isFirst && <Text style={styles.winnerBadge}>🏆 RECOMENDADO</Text>}
+                              </View>
+                              <Text style={styles.compRateSub}>
+                                Tasa: {item.rate.toFixed(2)} Bs
+                                {isPM && includePagoMovilFee ? ' (+0.3% com.)' : ''}
+                              </Text>
+                            </View>
+                          </View>
+
+                          <View style={styles.compRight}>
+                            <Text style={[styles.compTotal, isFirst && styles.compTotalWinner]}>
+                              {item.netTotal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                            </Text>
+                            <Text style={styles.viewDetailsHint}>
+                              {isCurrentTab ? '• Viendo detalles •' : 'Tocar para ver'}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
             </View>
           )}
 
@@ -566,12 +589,12 @@ export default function App() {
               )}
 
               {/* Lista de los primeros comerciantes reales de Binance con Énfasis en Banco */}
-              {currentMethodRecord?.top_traders?.[tierKey] && currentMethodRecord.top_traders[tierKey].length > 0 && (
+              {activeTopTraders && activeTopTraders.length > 0 && (
                 <View style={styles.tradersContainer}>
                   <Text style={styles.tradersTitle}>
                     🥇 TOP COMERCIANTES EN {PAY_METHODS.find((m) => m.id === activeTabMethod)?.label?.toUpperCase()} PARA ${selectedTier}:
                   </Text>
-                  {currentMethodRecord.top_traders[tierKey].map((t, idx) => (
+                  {activeTopTraders.map((t, idx) => (
                     <View key={idx} style={[styles.traderRow, idx === 0 && styles.traderRowFirst]}>
                       <View style={styles.traderInfo}>
                         <Text style={[styles.traderRank, idx === 0 && styles.traderRankFirst]}>
@@ -801,11 +824,31 @@ const styles = StyleSheet.create({
     borderColor: '#1e293b',
     marginBottom: 16,
   },
+  comparisonHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   comparisonTitle: {
     fontSize: 12,
     fontWeight: '900',
     color: '#38bdf8',
     letterSpacing: 0.5,
+    flex: 1,
+  },
+  comparisonToggleBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: '#1e293b',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#334155',
+    marginLeft: 8,
+  },
+  comparisonToggleBtnText: {
+    fontSize: 11,
+    color: '#38bdf8',
+    fontWeight: '700',
   },
   comparisonSubtitle: {
     fontSize: 11,
