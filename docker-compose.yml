@@ -10,8 +10,8 @@ services:
 
   extractor:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: worker/Dockerfile
     container_name: estimador-binance-extractor
     env_file:
       - ./worker/.env
