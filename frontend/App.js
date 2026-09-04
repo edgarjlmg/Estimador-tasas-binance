@@ -532,8 +532,55 @@ export default function App() {
             </View>
           </View>
 
+          {/* Tarjetas de Pestañas de Métodos para Alternar la Ficha Principal */}
+          <View style={styles.subTabsContainer}>
+            <Text style={styles.subTabsLabel}>
+              {selectedMethods.length > 1
+                ? 'Inspeccionando método o banco (Toca para cambiar el análisis):'
+                : 'Inspeccionando detalle de:'}
+            </Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subTabsScroll}>
+              {selectedMethods.map((mId) => {
+                const mInfo = PAY_METHODS.find((p) => p.id === mId);
+                const isActive = activeTabMethod === mId;
+                const isBest = bestMethodId === mId && selectedMethods.length > 1;
+                return (
+                  <TouchableOpacity
+                    key={mId}
+                    style={[
+                      styles.subTabPill,
+                      isActive && styles.subTabPillActive,
+                      isBest && styles.subTabPillBest
+                    ]}
+                    onPress={() => setActiveTabMethod(mId)}
+                  >
+                    <Text style={styles.subTabIcon}>{mInfo?.icon}</Text>
+                    <Text style={[styles.subTabLabel, isActive && styles.subTabLabelActive]}>
+                      {mInfo?.label}
+                    </Text>
+                    {isBest && <Text style={styles.subTabBestBadge}>⭐ MEJOR</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
           {/* 🚦 Semáforo Predictivo de 7 Estados */}
           <View style={[styles.signalCard, { backgroundColor: signalState.bg, borderColor: signalState.border }]}>
+            {/* Cabecera contextual destacada con el banco activo */}
+            <View style={styles.signalMethodBadgeRow}>
+              <View style={styles.signalMethodPill}>
+                <Text style={styles.signalMethodPillText}>
+                  {PAY_METHODS.find((m) => m.id === activeTabMethod)?.icon} ANÁLISIS EN DIRECTO: {PAY_METHODS.find((m) => m.id === activeTabMethod)?.label?.toUpperCase()} (${selectedTier})
+                </Text>
+              </View>
+              {selectedMethods.length > 1 && (
+                <Text style={styles.signalSwitchHint}>
+                  (Toca otro método arriba para ver su diagnóstico)
+                </Text>
+              )}
+            </View>
+
             <View style={styles.signalTopRow}>
               <View style={styles.signalTitleGroup}>
                 <View style={[styles.signalDot, { backgroundColor: signalState.text }]} />
@@ -620,29 +667,6 @@ export default function App() {
             <Text style={styles.timingEvent}>
               💡 <Text style={styles.timingEventBold}>Próximo evento clave:</Text> {timingAnalysis.nextEvent}
             </Text>
-          </View>
-
-          {/* Tarjetas de Pestañas de Métodos para Alternar la Ficha Principal */}
-          <View style={styles.subTabsContainer}>
-            <Text style={styles.subTabsLabel}>Inspeccionando detalle de:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subTabsScroll}>
-              {selectedMethods.map((mId) => {
-                const mInfo = PAY_METHODS.find((p) => p.id === mId);
-                const isActive = activeTabMethod === mId;
-                return (
-                  <TouchableOpacity
-                    key={mId}
-                    style={[styles.subTabPill, isActive && styles.subTabPillActive]}
-                    onPress={() => setActiveTabMethod(mId)}
-                  >
-                    <Text style={styles.subTabIcon}>{mInfo?.icon}</Text>
-                    <Text style={[styles.subTabLabel, isActive && styles.subTabLabelActive]}>
-                      {mInfo?.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
           </View>
 
           {/* Tarjeta Principal de Tasa P2P con Énfasis de Método */}
@@ -1101,6 +1125,33 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     marginBottom: 12,
   },
+  signalMethodBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  signalMethodPill: {
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    paddingVertical: 3,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  signalMethodPillText: {
+    color: '#f8fafc',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+  },
+  signalSwitchHint: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontStyle: 'italic',
+  },
   signalTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1303,6 +1354,19 @@ const styles = StyleSheet.create({
   subTabPillActive: {
     backgroundColor: '#0284c7',
     borderColor: '#38bdf8',
+  },
+  subTabPillBest: {
+    borderColor: '#10b981',
+  },
+  subTabBestBadge: {
+    fontSize: 9,
+    backgroundColor: '#059669',
+    color: '#ffffff',
+    fontWeight: '800',
+    paddingHorizontal: 4,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 6,
   },
   subTabIcon: {
     fontSize: 12,
