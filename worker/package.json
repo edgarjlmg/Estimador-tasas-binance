@@ -4,6 +4,7 @@
   "description": "Cloudflare Worker con Cron Trigger para monitorear Binance P2P cada 60 segundos",
   "main": "src/index.ts",
   "scripts": {
+    "start": "node src/runner.js",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },

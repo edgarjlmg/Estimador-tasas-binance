@@ -18,6 +18,16 @@ if (!SERVICE_KEY) {
   process.exit(1);
 }
 
+// Servidor HTTP ligero para health check en plataformas en la nube (Railway, Render, Koyeb)
+const http = require('http');
+const PORT = process.env.PORT || 8080;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({ status: 'ok', service: 'estimador-binance-extractor', uptime: process.uptime() }));
+}).listen(PORT, () => {
+  console.log(`[HTTP] Servidor de salud escuchando en puerto ${PORT}`);
+});
+
 // Tasa aproximada de referencia en memoria para convertir USD a VES al consultar la API
 let lastKnownRate = 966.0;
 
