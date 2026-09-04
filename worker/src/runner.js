@@ -80,7 +80,7 @@ async function fetchAndStoreP2P(methodId, tradeType) {
         merchantCheck: false,
         page: 1,
         payTypes: [methodId],
-        publisherType: null,
+        publisherType: 'merchant',
         rows: 10,
         tradeType: tradeType,
         transAmount: String(estimatedVes) // Clave para obtener los anuncios reales y eliminar órdenes mayoristas incompatibles
