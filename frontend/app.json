@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "Estimador P2P - Monitor Binance & BCV",
+    "slug": "estimador-p2p",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",

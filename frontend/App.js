@@ -41,18 +41,20 @@ export default function App() {
   const [showSignalStats, setShowSignalStats] = useState(false); // Desplegable de máximos y mínimos con sus horas
   const [historicalTicks, setHistoricalTicks] = useState([]); // Historial de cotizaciones recientes para análisis de extremos
 
-  // Conmutar selección múltiple de métodos
+  // Conmutar selección múltiple de métodos (permite deseleccionar todos)
   const toggleMethod = (methodId) => {
     setSelectedMethods((prev) => {
       let updated;
       if (prev.includes(methodId)) {
-        if (prev.length === 1) return prev; // Mantener al menos 1 seleccionado
         updated = prev.filter((id) => id !== methodId);
         if (activeTabMethod === methodId) {
-          setActiveTabMethod(updated[0]);
+          setActiveTabMethod(updated.length > 0 ? updated[0] : null);
         }
       } else {
         updated = [...prev, methodId];
+        if (!activeTabMethod) {
+          setActiveTabMethod(methodId);
+        }
       }
       return updated;
     });
@@ -532,38 +534,49 @@ export default function App() {
             </View>
           </View>
 
-          {/* Tarjetas de Pestañas de Métodos para Alternar la Ficha Principal */}
-          <View style={styles.subTabsContainer}>
-            <Text style={styles.subTabsLabel}>
-              {selectedMethods.length > 1
-                ? 'Inspeccionando método o banco (Toca para cambiar el análisis):'
-                : 'Inspeccionando detalle de:'}
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subTabsScroll}>
-              {selectedMethods.map((mId) => {
-                const mInfo = PAY_METHODS.find((p) => p.id === mId);
-                const isActive = activeTabMethod === mId;
-                const isBest = bestMethodId === mId && selectedMethods.length > 1;
-                return (
-                  <TouchableOpacity
-                    key={mId}
-                    style={[
-                      styles.subTabPill,
-                      isActive && styles.subTabPillActive,
-                      isBest && styles.subTabPillBest
-                    ]}
-                    onPress={() => setActiveTabMethod(mId)}
-                  >
-                    <Text style={styles.subTabIcon}>{mInfo?.icon}</Text>
-                    <Text style={[styles.subTabLabel, isActive && styles.subTabLabelActive]}>
-                      {mInfo?.label}
-                    </Text>
-                    {isBest && <Text style={styles.subTabBestBadge}>⭐ MEJOR</Text>}
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
+          {/* Estado vacío cuando se deseleccionan todos los métodos */}
+          {selectedMethods.length === 0 ? (
+            <View style={styles.emptySelectionBox}>
+              <Text style={styles.emptySelectionIcon}>👆</Text>
+              <Text style={styles.emptySelectionTitle}>Ningún método seleccionado</Text>
+              <Text style={styles.emptySelectionSubtitle}>
+                Selecciona al menos un método de pago o banco arriba para ver las tasas, semáforo predictivo y comerciantes de Binance P2P.
+              </Text>
+            </View>
+          ) : (
+            <>
+              {/* Tarjetas de Pestañas de Métodos para Alternar la Ficha Principal */}
+              <View style={styles.subTabsContainer}>
+                <Text style={styles.subTabsLabel}>
+                  {selectedMethods.length > 1
+                    ? 'Inspeccionando método o banco (Toca para cambiar el análisis):'
+                    : 'Inspeccionando detalle de:'}
+                </Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subTabsScroll}>
+                  {selectedMethods.map((mId) => {
+                    const mInfo = PAY_METHODS.find((p) => p.id === mId);
+                    const isActive = activeTabMethod === mId;
+                    const isBest = bestMethodId === mId && selectedMethods.length > 1;
+                    return (
+                      <TouchableOpacity
+                        key={mId}
+                        style={[
+                          styles.subTabPill,
+                          isActive && styles.subTabPillActive,
+                          isBest && styles.subTabPillBest
+                        ]}
+                        onPress={() => setActiveTabMethod(mId)}
+                      >
+                        <Text style={styles.subTabIcon}>{mInfo?.icon}</Text>
+                        <Text style={[styles.subTabLabel, isActive && styles.subTabLabelActive]}>
+                          {mInfo?.label}
+                        </Text>
+                        {isBest && <Text style={styles.subTabBestBadge}>⭐ MEJOR</Text>}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
 
           {/* 🚦 Semáforo Predictivo de 7 Estados */}
           <View style={[styles.signalCard, { backgroundColor: signalState.bg, borderColor: signalState.border }]}>
@@ -774,6 +787,8 @@ export default function App() {
               )}
             </View>
           )}
+        </>
+      )}
 
           {/* Módulo Comparativo: Tasas Oficiales Banco Central de Venezuela (BCV & Euro) */}
           <View style={styles.bcvBox}>
@@ -1379,6 +1394,35 @@ const styles = StyleSheet.create({
   },
   subTabLabelActive: {
     color: '#ffffff',
+  },
+  emptySelectionBox: {
+    width: '100%',
+    backgroundColor: '#131c2e',
+    borderRadius: 14,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#1e293b',
+    borderStyle: 'dashed',
+    marginBottom: 16,
+    marginTop: 6,
+  },
+  emptySelectionIcon: {
+    fontSize: 28,
+    marginBottom: 8,
+  },
+  emptySelectionTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#f8fafc',
+    marginBottom: 6,
+  },
+  emptySelectionSubtitle: {
+    fontSize: 12,
+    color: '#94a3b8',
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 340,
   },
   rateCard: {
     width: '100%',
