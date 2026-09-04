@@ -149,11 +149,11 @@ export default function App() {
     setLoading(true);
     fetchAllMarketData();
 
-    // Actualización periódica cada 30 segundos
+    // Actualización rápida periódica cada 10 segundos para máxima sincronización
     const interval = setInterval(() => {
       fetchAllMarketData();
       fetchBcvRates();
-    }, 30000);
+    }, 10000);
 
     // Suscripción Realtime a Supabase: se actualiza al instante en cuanto el extractor guarda un tick
     const channel = supabase
