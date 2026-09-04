@@ -19,63 +19,63 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const TIERS = ['5', '20', '50', '100', '300'];
 
 const PAY_METHODS = [
-  { id: 'PagoMovil', label: 'Pago Móvil', icon: '📱' },
-  { id: 'BancoDeVenezuela', label: 'Venezuela', icon: '🏦' },
-  { id: 'Banesco', label: 'Banesco', icon: '🟢' },
-  { id: 'Mercantil', label: 'Mercantil', icon: '🔵' },
-  { id: 'Provincial', label: 'Provincial', icon: '🔷' },
-  { id: 'Bancaribe', label: 'Bancaribe', icon: '🟠' },
+  { id: 'PagoMovil', label: 'Pago Móvil', icon: '📱', commissionPct: 0.3 }, // 0.3% comisión bancaria estándar interbancaria
+  { id: 'BancoDeVenezuela', label: 'Venezuela', icon: '🏦', commissionPct: 0 },
+  { id: 'Banesco', label: 'Banesco', icon: '🟢', commissionPct: 0 },
+  { id: 'Mercantil', label: 'Mercantil', icon: '🔵', commissionPct: 0 },
+  { id: 'Provincial', label: 'Provincial', icon: '🔷', commissionPct: 0 },
+  { id: 'Bancaribe', label: 'Bancaribe', icon: '🟠', commissionPct: 0 },
 ];
 
 export default function App() {
   const [tradeType, setTradeType] = useState('BUY'); // 'BUY' = Comprar, 'SELL' = Vender
-  const [selectedMethod, setSelectedMethod] = useState('PagoMovil');
+  const [selectedMethods, setSelectedMethods] = useState(['Mercantil', 'PagoMovil', 'Banesco']); // Selección múltiple de métodos
+  const [activeTabMethod, setActiveTabMethod] = useState('Mercantil'); // Método visualizado en el detalle principal
   const [selectedTier, setSelectedTier] = useState('100');
-  const [marketData, setMarketData] = useState(null);
+  const [methodsData, setMethodsData] = useState({}); // Mapa de datos por cada método
   const [bcvData, setBcvData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [includePagoMovilFee, setIncludePagoMovilFee] = useState(true); // Opción para desglosar la comisión del Pago Móvil
 
-  // Consultar datos de Binance P2P
-  const fetchMarketSignal = async () => {
-    try {
-      const { data: v2Data, error: errV2 } = await supabase.rpc('get_market_signal_v2', {
-        target_tier: `${selectedTier}usd`,
-        target_trade_type: tradeType,
-        target_pay_method: selectedMethod
-      });
-
-      if (!errV2 && v2Data && v2Data.current_rate !== null) {
-        setMarketData(v2Data);
-        return;
+  // Conmutar selección múltiple de métodos
+  const toggleMethod = (methodId) => {
+    setSelectedMethods((prev) => {
+      let updated;
+      if (prev.includes(methodId)) {
+        if (prev.length === 1) return prev; // Mantener al menos 1 seleccionado
+        updated = prev.filter((id) => id !== methodId);
+        if (activeTabMethod === methodId) {
+          setActiveTabMethod(updated[0]);
+        }
+      } else {
+        updated = [...prev, methodId];
       }
+      return updated;
+    });
+  };
 
-      const { data: directData, error: directErr } = await supabase
+  // Consultar datos de Binance P2P para todos los métodos seleccionados simultáneamente
+  const fetchAllMarketData = async () => {
+    try {
+      const { data, error } = await supabase
         .from('p2p_ticks')
         .select('*')
         .eq('trade_type', tradeType)
-        .eq('pay_method', selectedMethod)
         .order('created_at', { ascending: false })
-        .limit(1);
+        .limit(20);
 
-      if (!directErr && directData && directData.length > 0) {
-        const item = directData[0];
-        const rate = Number(item[`rate_${selectedTier}usd`]) || item.market_avg;
-        setMarketData({
-          current_rate: rate,
-          min_today: rate * 0.99,
-          max_today: rate * 1.01,
-          avg_today: rate,
-          avg_last_4h: rate,
-          diff_percent: 0,
-          signal: 'YELLOW',
-          trade_type: tradeType,
-          pay_method: selectedMethod,
-          top_traders: item.top_traders?.[`${selectedTier}usd`] || []
+      if (!error && data) {
+        const latestByMethod = {};
+        data.forEach((item) => {
+          if (!latestByMethod[item.pay_method]) {
+            latestByMethod[item.pay_method] = item;
+          }
         });
+        setMethodsData(latestByMethod);
       }
     } catch (err) {
-      console.warn('Error consultando señal:', err.message);
+      console.warn('Error consultando métodos:', err.message);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
@@ -119,28 +119,26 @@ export default function App() {
 
   useEffect(() => {
     setLoading(true);
-    fetchMarketSignal();
+    fetchAllMarketData();
 
     const interval = setInterval(() => {
-      fetchMarketSignal();
+      fetchAllMarketData();
       fetchBcvRates();
     }, 60000);
 
     return () => clearInterval(interval);
-  }, [selectedTier, selectedMethod, tradeType]);
+  }, [selectedTier, tradeType]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
-    fetchMarketSignal();
+    fetchAllMarketData();
     fetchBcvRates();
   };
 
-  // 1. Análisis horario del mercado bancario venezolano y BCV
+  // Análisis horario del mercado venezolano
   const getMarketTimingAnalysis = () => {
     const now = new Date();
-    // Hora local en Venezuela (UTC-4)
     const hourVe = parseInt(now.toLocaleTimeString('es-VE', { timeZone: 'America/Caracas', hour: '2-digit', hour12: false }));
-    const dayVe = now.toLocaleDateString('es-VE', { timeZone: 'America/Caracas', weekday: 'short' });
 
     let windowStatus = '';
     let recommendation = '';
@@ -155,7 +153,7 @@ export default function App() {
     } else if (hourVe >= 13 && hourVe < 17) {
       windowStatus = '🟠 VENTANA DE INTERVENCIÓN CAMBIARIA Y CIERRE BCV (1 PM - 5 PM)';
       recommendation = tradeType === 'BUY'
-        ? 'El BCV publica su intervención cambiaria diaria en este rango (~4:00 PM). Comerciantes suelen abrir márgenes preventivos al alza.'
+        ? 'El BCV publica su cotización diaria oficial (~4:00 PM - 5:00 PM). Comerciantes suelen abrir márgenes preventivos al alza.'
         : 'Comerciantes ajustan tasas al alza previendo nueva cotización oficial. Ventana atractiva para vender si necesitas bolívares.';
       nextEvent = 'A partir de las 5:00 PM el BCV fija la tasa oficial para el día hábil siguiente.';
     } else if (hourVe >= 17 && hourVe < 22) {
@@ -172,61 +170,61 @@ export default function App() {
       nextEvent = 'A las 9:00 AM abre la cámara bancaria y entran decenas de comerciantes a competir.';
     }
 
-    return { windowStatus, recommendation, nextEvent, hourVe };
+    return { windowStatus, recommendation, nextEvent };
   };
 
   const timingAnalysis = getMarketTimingAnalysis();
 
-  // 2. Sistema Predictivo de 7 ESTADOS basado en la Brecha BCV y Desviación Estadística
-  const currentRate = Number(marketData?.current_rate || 0);
+  // Datos del método actualmente enfocado
+  const currentMethodRecord = methodsData[activeTabMethod];
+  const tierKey = `rate_${selectedTier}usd`;
+  const currentRate = Number(currentMethodRecord?.[tierKey] || currentMethodRecord?.market_avg || 0);
+  const tierNumber = Number(selectedTier);
+  const baseTotalBs = currentRate * tierNumber;
+
+  // Cálculo de comisiones bancarias para Pago Móvil (0.3% del monto transferido)
+  const isPagoMovil = activeTabMethod === 'PagoMovil';
+  const pagoMovilFeeBs = isPagoMovil ? baseTotalBs * 0.003 : 0;
+  const totalWithFeeBs = tradeType === 'BUY' ? baseTotalBs + pagoMovilFeeBs : baseTotalBs - pagoMovilFeeBs;
+
+  // Datos oficiales BCV y cálculo de brecha
   const bcvUsd = Number(bcvData?.rate_usd || 807.38);
   const bcvEur = Number(bcvData?.rate_eur || 938.44);
-  const tierNumber = Number(selectedTier);
-  const totalBsP2P = currentRate * tierNumber;
   const totalBsBCV = bcvUsd * tierNumber;
   const rawBrecha = currentRate > 0 && bcvUsd > 0 ? ((currentRate - bcvUsd) / bcvUsd) * 100 : 19.5;
   const brechaFormatted = rawBrecha.toFixed(1);
 
+  // Sistema de 7 Estados
   const getSevenStateSignal = () => {
     const isBuy = tradeType === 'BUY';
-    const diff = Number(marketData?.diff_percent || 0);
-    // Para Venezuela, la brecha cambiaria histórica reciente promedio oscila entre 18% y 22%
-    // Cuanto menor es la brecha respecto al BCV, más barato compras dólares.
-
-    // Puntuación combinada: variación intradía (diff) y nivel de brecha cambiaria
-    let score = 0; // -3 (muy desfavorable) a +3 (óptimo absoluto)
+    let score = 0;
 
     if (isBuy) {
-      // Al comprar queremos: diff negativo (bajando) y brecha baja respecto al BCV
-      if (diff <= -1.0 || rawBrecha <= 17.5) score += 2;
-      else if (diff <= -0.4 || rawBrecha <= 18.5) score += 1;
-      else if (diff >= 1.0 || rawBrecha >= 21.5) score -= 2;
-      else if (diff >= 0.4 || rawBrecha >= 20.2) score -= 1;
+      if (rawBrecha <= 18.0) score += 2;
+      else if (rawBrecha <= 19.2) score += 1;
+      else if (rawBrecha >= 21.5) score -= 2;
+      else if (rawBrecha >= 20.3) score -= 1;
     } else {
-      // Al vender queremos: diff positivo (subiendo) y brecha alta respecto al BCV (te pagan más Bs)
-      if (diff >= 1.0 || rawBrecha >= 21.5) score += 2;
-      else if (diff >= 0.4 || rawBrecha >= 20.2) score += 1;
-      else if (diff <= -1.0 || rawBrecha <= 17.5) score -= 2;
-      else if (diff <= -0.4 || rawBrecha <= 18.5) score -= 1;
+      if (rawBrecha >= 21.5) score += 2;
+      else if (rawBrecha >= 20.3) score += 1;
+      else if (rawBrecha <= 18.0) score -= 2;
+      else if (rawBrecha <= 19.2) score -= 1;
     }
 
     switch (score) {
-      case 3:
       case 2:
         return {
-          level: 7,
           tag: isBuy ? '🌟 MOMENTO EXCELENTE (MUY BUENO)' : '🌟 MOMENTO EXCELENTE (PAGO MÁXIMO)',
           bg: '#064e3b',
           border: '#10b981',
           text: '#34d399',
           barPct: '100%',
           desc: isBuy
-            ? `La tasa está en mínimos con brecha comprimida (+${brechaFormatted}% vs BCV). Oportunidad dorada para comprar dólares.`
+            ? `La tasa está en mínimos con brecha comprimida (+${brechaFormatted}% vs BCV). Oportunidad dorada para comprar.`
             : `Pagan la tasa más alta del día (+${brechaFormatted}% sobre BCV). Excelente oportunidad para vender y asegurar bolívares.`
         };
       case 1:
         return {
-          level: 6,
           tag: isBuy ? '✅ FAVORABLE / BUENO' : '✅ FAVORABLE / BUENO',
           bg: '#065f46',
           border: '#059669',
@@ -239,7 +237,6 @@ export default function App() {
       case 0:
       default:
         return {
-          level: 4,
           tag: '⚖️ PROMEDIO DEL DÍA (ESTABLE)',
           bg: '#78350f',
           border: '#f59e0b',
@@ -249,7 +246,6 @@ export default function App() {
         };
       case -1:
         return {
-          level: 2,
           tag: isBuy ? '⚠️ REGULAR / DESFAVORABLE' : '⚠️ REGULAR / TASA BAJA',
           bg: '#7c2d12',
           border: '#ea580c',
@@ -260,9 +256,7 @@ export default function App() {
             : 'Los compradores están ofertando por debajo del promedio. Conviene aguardar mayor liquidez.'
         };
       case -2:
-      case -3:
         return {
-          level: 1,
           tag: isBuy ? '🛑 MUY MAL MOMENTO (PRECIO INFLADO)' : '🛑 MUY MAL MOMENTO (DESCUENTO EXCESIVO)',
           bg: '#7f1d1d',
           border: '#ef4444',
@@ -276,6 +270,22 @@ export default function App() {
   };
 
   const signalState = getSevenStateSignal();
+
+  // Encontrar el método más rentable de los seleccionados
+  const rankedMethods = selectedMethods
+    .map((mId) => {
+      const rec = methodsData[mId];
+      const rate = Number(rec?.[tierKey] || rec?.market_avg || 0);
+      const isPm = mId === 'PagoMovil';
+      const netTotal = tradeType === 'BUY'
+        ? (isPm && includePagoMovilFee ? rate * tierNumber * 1.003 : rate * tierNumber)
+        : (isPm && includePagoMovilFee ? rate * tierNumber * 0.997 : rate * tierNumber);
+      return { id: mId, rate, netTotal };
+    })
+    .filter((m) => m.rate > 0)
+    .sort((a, b) => (tradeType === 'BUY' ? a.netTotal - b.netTotal : b.netTotal - a.netTotal));
+
+  const bestMethodId = rankedMethods[0]?.id;
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -312,28 +322,104 @@ export default function App() {
             </TouchableOpacity>
           </View>
 
-          {/* Selector de Métodos / Bancos en cuadrícula visible */}
+          {/* Selector Múltiple de Métodos o Bancos */}
           <View style={styles.methodsWrapper}>
-            <Text style={styles.sectionLabel}>Selecciona el Método o Banco:</Text>
+            <View style={styles.methodsHeaderRow}>
+              <Text style={styles.sectionLabel}>Tus Métodos Disponibles (Toca para activar/desactivar):</Text>
+            </View>
             <View style={styles.methodsGrid}>
               {PAY_METHODS.map((m) => {
-                const isSelected = selectedMethod === m.id;
+                const isSelected = selectedMethods.includes(m.id);
+                const isBest = bestMethodId === m.id && selectedMethods.length > 1;
                 return (
                   <TouchableOpacity
                     key={m.id}
-                    style={[styles.methodPill, isSelected && styles.methodPillActive]}
-                    onPress={() => setSelectedMethod(m.id)}
+                    style={[
+                      styles.methodPill,
+                      isSelected && styles.methodPillActive,
+                      isBest && styles.methodPillBest
+                    ]}
+                    onPress={() => toggleMethod(m.id)}
                     activeOpacity={0.7}
                   >
                     <Text style={styles.methodIcon}>{m.icon}</Text>
-                    <Text style={[styles.methodLabel, isSelected && styles.methodLabelActive]}>
-                      {m.label}
-                    </Text>
+                    <View style={styles.methodTextWrap}>
+                      <Text style={[styles.methodLabel, isSelected && styles.methodLabelActive]}>
+                        {m.label}
+                      </Text>
+                      {isBest && (
+                        <Text style={styles.bestTag}>
+                          {tradeType === 'BUY' ? 'MÁS BARATO' : 'MÁS PAGA'}
+                        </Text>
+                      )}
+                    </View>
+                    <Text style={styles.checkboxIcon}>{isSelected ? '☑️' : '◻️'}</Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
           </View>
+
+          {/* Cuadro Comparativo de Rentabilidad entre los bancos elegidos */}
+          {selectedMethods.length > 1 && (
+            <View style={styles.comparisonBox}>
+              <Text style={styles.comparisonTitle}>
+                ⚖️ COMPARATIVA DE RENTABILIDAD PARA ${selectedTier}:
+              </Text>
+              <Text style={styles.comparisonSubtitle}>
+                {tradeType === 'BUY'
+                  ? 'Te conviene el método con menor desembolso total en Bs:'
+                  : 'Te conviene el método donde recibes más Bolívares:'}
+              </Text>
+
+              <View style={styles.comparisonTable}>
+                {rankedMethods.map((item, idx) => {
+                  const mInfo = PAY_METHODS.find((p) => p.id === item.id);
+                  const isFirst = idx === 0;
+                  const isPM = item.id === 'PagoMovil';
+                  const isCurrentTab = activeTabMethod === item.id;
+
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[
+                        styles.compRow,
+                        isFirst && styles.compRowWinner,
+                        isCurrentTab && styles.compRowSelected
+                      ]}
+                      onPress={() => setActiveTabMethod(item.id)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.compLeft}>
+                        <Text style={styles.compIcon}>{mInfo?.icon}</Text>
+                        <View>
+                          <View style={styles.compTitleRow}>
+                            <Text style={[styles.compName, isFirst && styles.compNameWinner]}>
+                              {mInfo?.label}
+                            </Text>
+                            {isFirst && <Text style={styles.winnerBadge}>🏆 RECOMENDADO</Text>}
+                          </View>
+                          <Text style={styles.compRateSub}>
+                            Tasa: {item.rate.toFixed(2)} Bs
+                            {isPM && includePagoMovilFee ? ' (+0.3% com.)' : ''}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.compRight}>
+                        <Text style={[styles.compTotal, isFirst && styles.compTotalWinner]}>
+                          {item.netTotal.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                        </Text>
+                        <Text style={styles.viewDetailsHint}>
+                          {isCurrentTab ? '• Viendo detalles •' : 'Tocar para ver'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
 
           {/* Selector de Monto (Tiers) */}
           <View style={styles.tierSection}>
@@ -365,10 +451,7 @@ export default function App() {
                 {signalState.tag}
               </Text>
             </View>
-
             <Text style={styles.signalDescriptionText}>{signalState.desc}</Text>
-
-            {/* Barra visual de conveniencia (0 a 100%) */}
             <View style={styles.meterTrack}>
               <View style={[styles.meterFill, { width: signalState.barPct, backgroundColor: signalState.border }]} />
             </View>
@@ -384,17 +467,47 @@ export default function App() {
             </Text>
           </View>
 
-          {/* Tarjeta Principal de Tasa P2P */}
-          {loading && !marketData ? (
+          {/* Tarjetas de Pestañas de Métodos para Alternar la Ficha Principal */}
+          <View style={styles.subTabsContainer}>
+            <Text style={styles.subTabsLabel}>Inspeccionando detalle de:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.subTabsScroll}>
+              {selectedMethods.map((mId) => {
+                const mInfo = PAY_METHODS.find((p) => p.id === mId);
+                const isActive = activeTabMethod === mId;
+                return (
+                  <TouchableOpacity
+                    key={mId}
+                    style={[styles.subTabPill, isActive && styles.subTabPillActive]}
+                    onPress={() => setActiveTabMethod(mId)}
+                  >
+                    <Text style={styles.subTabIcon}>{mInfo?.icon}</Text>
+                    <Text style={[styles.subTabLabel, isActive && styles.subTabLabelActive]}>
+                      {mInfo?.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Tarjeta Principal de Tasa P2P con Énfasis de Método */}
+          {loading && !currentMethodRecord ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color="#38bdf8" />
               <Text style={styles.loadingText}>Consultando libro de órdenes en vivo...</Text>
             </View>
           ) : (
             <View style={styles.rateCard}>
+              {/* Énfasis claro del Método o Banco */}
+              <View style={styles.methodHeaderBadge}>
+                <Text style={styles.methodHeaderBadgeText}>
+                  {PAY_METHODS.find((m) => m.id === activeTabMethod)?.icon}{' '}
+                  CANAL SELECCIONADO: {PAY_METHODS.find((m) => m.id === activeTabMethod)?.label?.toUpperCase()}
+                </Text>
+              </View>
+
               <Text style={styles.rateHeaderLabel}>
-                {tradeType === 'BUY' ? 'Mejor tasa de compra para' : 'Mejor tasa de venta para'} ${selectedTier} en{' '}
-                {PAY_METHODS.find((m) => m.id === selectedMethod)?.label}
+                {tradeType === 'BUY' ? 'Mejor tasa de compra para' : 'Mejor tasa de venta para'} ${selectedTier}:
               </Text>
 
               <View style={styles.rateNumberRow}>
@@ -409,20 +522,56 @@ export default function App() {
               <Text style={styles.receiveLabel}>
                 {tradeType === 'BUY' ? 'Total en Bolívares a pagar:' : 'Total en Bolívares a recibir:'}
               </Text>
+              
               <Text style={styles.receiveTotal}>
-                {totalBsP2P > 0
-                  ? totalBsP2P.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                {baseTotalBs > 0
+                  ? baseTotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
                   : '---'}{' '}
                 <Text style={styles.currencyBs}>Bs.</Text>
               </Text>
 
-              {/* Lista de los primeros comerciantes reales de Binance */}
-              {marketData?.top_traders && marketData.top_traders.length > 0 && (
+              {/* Módulo Especial de Comisión Bancaria para Pago Móvil */}
+              {isPagoMovil && (
+                <View style={styles.feeCard}>
+                  <View style={styles.feeHeader}>
+                    <Text style={styles.feeTitle}>⚠️ AVISO COMISIÓN PAGO MÓVIL (0.3%)</Text>
+                    <TouchableOpacity
+                      style={styles.feeToggleBtn}
+                      onPress={() => setIncludePagoMovilFee(!includePagoMovilFee)}
+                    >
+                      <Text style={styles.feeToggleBtnText}>
+                        {includePagoMovilFee ? 'Ocultar desglose' : 'Calcular con comisión'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <Text style={styles.feeExplanation}>
+                    Los bancos en Venezuela cobran un 0.3% por transferencias P2P interbancarias (aprox.{' '}
+                    {pagoMovilFeeBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs).
+                  </Text>
+
+                  {includePagoMovilFee && (
+                    <View style={styles.feeCalculationBox}>
+                      <Text style={styles.feeCalcText}>
+                        {tradeType === 'BUY'
+                          ? `Total real a desembolsar: (${baseTotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs + ${pagoMovilFeeBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs com.) = `
+                          : `Total neto a recibir: (${baseTotalBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs - ${pagoMovilFeeBs.toLocaleString('es-VE', { minimumFractionDigits: 2 })} Bs com.) = `}
+                        <Text style={styles.feeCalcTotal}>
+                          {totalWithFeeBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                        </Text>
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {/* Lista de los primeros comerciantes reales de Binance con Énfasis en Banco */}
+              {currentMethodRecord?.top_traders?.[tierKey] && currentMethodRecord.top_traders[tierKey].length > 0 && (
                 <View style={styles.tradersContainer}>
                   <Text style={styles.tradersTitle}>
-                    🥇 MEJORES OFERTAS EN VIVO PARA ${selectedTier}:
+                    🥇 TOP COMERCIANTES EN {PAY_METHODS.find((m) => m.id === activeTabMethod)?.label?.toUpperCase()} PARA ${selectedTier}:
                   </Text>
-                  {marketData.top_traders.map((t, idx) => (
+                  {currentMethodRecord.top_traders[tierKey].map((t, idx) => (
                     <View key={idx} style={[styles.traderRow, idx === 0 && styles.traderRowFirst]}>
                       <View style={styles.traderInfo}>
                         <Text style={[styles.traderRank, idx === 0 && styles.traderRankFirst]}>
@@ -433,7 +582,7 @@ export default function App() {
                             {t.nickName}
                           </Text>
                           <Text style={styles.traderOrders}>
-                            {t.orders} órdenes • {t.finishRate}
+                            Vía {PAY_METHODS.find((m) => m.id === activeTabMethod)?.label} • {t.orders} órdenes • {t.finishRate}
                           </Text>
                         </View>
                       </View>
@@ -460,7 +609,6 @@ export default function App() {
             </View>
 
             <View style={styles.bcvGrid}>
-              {/* Columna Dólar BCV */}
               <View style={styles.bcvCol}>
                 <Text style={styles.bcvCurrencyLabel}>DÓLAR BCV (USD)</Text>
                 <Text style={styles.bcvRateValue}>{bcvUsd.toFixed(2)} Bs</Text>
@@ -471,20 +619,19 @@ export default function App() {
                   </Text>
                 </Text>
                 <Text style={styles.bcvDiffSub}>
-                  Diferencia vs P2P: {(Math.abs(totalBsP2P - totalBsBCV)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                  Diferencia vs P2P: {(Math.abs(baseTotalBs - totalBsBCV)).toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
                 </Text>
               </View>
 
               <View style={styles.bcvColDivider} />
 
-              {/* Columna Euro BCV */}
               <View style={styles.bcvCol}>
                 <Text style={styles.bcvCurrencyLabel}>EURO BCV (EUR)</Text>
                 <Text style={styles.bcvRateValue}>{bcvEur.toFixed(2)} Bs</Text>
                 <Text style={styles.bcvEquiv}>
                   En Euros aprox:{' '}
                   <Text style={styles.bcvEquivBold}>
-                    {bcvEur > 0 ? (totalBsP2P / bcvEur).toFixed(2) : '---'} €
+                    {bcvEur > 0 ? (baseTotalBs / bcvEur).toFixed(2) : '---'} €
                   </Text>
                 </Text>
                 <Text style={styles.bcvDiffSub}>
@@ -581,13 +728,18 @@ const styles = StyleSheet.create({
   },
   methodsWrapper: {
     width: '100%',
-    marginBottom: 16,
+    marginBottom: 14,
+  },
+  methodsHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
   },
   sectionLabel: {
     fontSize: 12,
     color: '#cbd5e1',
     fontWeight: '600',
-    marginBottom: 8,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
@@ -600,7 +752,6 @@ const styles = StyleSheet.create({
   methodPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: '#131c2e',
     paddingVertical: 10,
     paddingHorizontal: 8,
@@ -614,17 +765,128 @@ const styles = StyleSheet.create({
     borderColor: '#38bdf8',
     backgroundColor: '#0f2744',
   },
+  methodPillBest: {
+    borderColor: '#10b981',
+  },
   methodIcon: {
     fontSize: 14,
     marginRight: 6,
   },
+  methodTextWrap: {
+    flex: 1,
+  },
   methodLabel: {
     color: '#94a3b8',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
   },
   methodLabelActive: {
     color: '#38bdf8',
+  },
+  bestTag: {
+    fontSize: 9,
+    color: '#34d399',
+    fontWeight: '800',
+  },
+  checkboxIcon: {
+    fontSize: 12,
+    marginLeft: 4,
+  },
+  comparisonBox: {
+    width: '100%',
+    backgroundColor: '#0f172a',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1.5,
+    borderColor: '#1e293b',
+    marginBottom: 16,
+  },
+  comparisonTitle: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#38bdf8',
+    letterSpacing: 0.5,
+  },
+  comparisonSubtitle: {
+    fontSize: 11,
+    color: '#94a3b8',
+    marginTop: 2,
+    marginBottom: 10,
+  },
+  comparisonTable: {
+    width: '100%',
+  },
+  compRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: '#131c2e',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  compRowWinner: {
+    borderColor: '#10b981',
+    backgroundColor: '#062d22',
+  },
+  compRowSelected: {
+    borderWidth: 1.5,
+    borderColor: '#38bdf8',
+  },
+  compLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  compIcon: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  compTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  compName: {
+    color: '#e2e8f0',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  compNameWinner: {
+    color: '#34d399',
+  },
+  winnerBadge: {
+    fontSize: 9,
+    backgroundColor: '#059669',
+    color: '#ffffff',
+    fontWeight: '800',
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: 4,
+    marginLeft: 6,
+  },
+  compRateSub: {
+    color: '#94a3b8',
+    fontSize: 11,
+    marginTop: 1,
+  },
+  compRight: {
+    alignItems: 'flex-end',
+  },
+  compTotal: {
+    color: '#f8fafc',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  compTotalWinner: {
+    color: '#34d399',
+    fontSize: 15,
+  },
+  viewDetailsHint: {
+    fontSize: 9,
+    color: '#64748b',
+    marginTop: 1,
   },
   tierSection: {
     width: '100%',
@@ -732,6 +994,47 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     fontWeight: '700',
   },
+  subTabsContainer: {
+    width: '100%',
+    marginBottom: 10,
+  },
+  subTabsLabel: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontWeight: '700',
+    marginBottom: 6,
+    textTransform: 'uppercase',
+  },
+  subTabsScroll: {
+    paddingVertical: 2,
+  },
+  subTabPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#131c2e',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  subTabPillActive: {
+    backgroundColor: '#0284c7',
+    borderColor: '#38bdf8',
+  },
+  subTabIcon: {
+    fontSize: 12,
+    marginRight: 4,
+  },
+  subTabLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  subTabLabelActive: {
+    color: '#ffffff',
+  },
   rateCard: {
     width: '100%',
     backgroundColor: '#131c2e',
@@ -742,6 +1045,21 @@ const styles = StyleSheet.create({
     borderColor: '#1e293b',
     marginBottom: 14,
   },
+  methodHeaderBadge: {
+    backgroundColor: '#0f2744',
+    paddingVertical: 5,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#38bdf8',
+    marginBottom: 10,
+  },
+  methodHeaderBadgeText: {
+    color: '#38bdf8',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
   rateHeaderLabel: {
     fontSize: 12,
     color: '#94a3b8',
@@ -751,7 +1069,7 @@ const styles = StyleSheet.create({
   rateNumberRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    marginTop: 6,
+    marginTop: 4,
     marginBottom: 6,
   },
   rateBigValue: {
@@ -786,6 +1104,57 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#38bdf8',
     fontWeight: '700',
+  },
+  feeCard: {
+    width: '100%',
+    backgroundColor: '#1c1917',
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 14,
+    borderWidth: 1,
+    borderColor: '#78350f',
+  },
+  feeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  feeTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#f59e0b',
+  },
+  feeToggleBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    backgroundColor: '#292524',
+    borderRadius: 6,
+  },
+  feeToggleBtnText: {
+    fontSize: 10,
+    color: '#fcd34d',
+    fontWeight: '700',
+  },
+  feeExplanation: {
+    fontSize: 11,
+    color: '#d6d3d1',
+    lineHeight: 15,
+  },
+  feeCalculationBox: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#44403c',
+  },
+  feeCalcText: {
+    fontSize: 12,
+    color: '#fcd34d',
+  },
+  feeCalcTotal: {
+    fontWeight: '900',
+    fontSize: 14,
+    color: '#ffffff',
   },
   tradersContainer: {
     width: '100%',
