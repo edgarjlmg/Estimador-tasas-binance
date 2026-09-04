@@ -12,116 +12,248 @@ import {
 } from 'react-native';
 import { createClient } from '@supabase/supabase-js';
 
-// Configuración de Supabase (reemplazar con las credenciales de tu proyecto)
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || "https://TU_PROYECTO.supabase.co";
-const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "TU_SUPABASE_ANON_KEY";
-
+const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://oupmnztfysiexhgcgcny.supabase.co';
+const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'sb_publishable_zRlCNAkHnXDoRcUIDVe2fA_3HCUcESu';
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const TIERS = ['5', '20', '50', '100', '300'];
 
+const PAY_METHODS = [
+  { id: 'PagoMovil', label: 'Pago Móvil', icon: '📱' },
+  { id: 'BancoDeVenezuela', label: 'Venezuela', icon: '🏦' },
+  { id: 'Banesco', label: 'Banesco', icon: '🟢' },
+  { id: 'Mercantil', label: 'Mercantil', icon: '🔵' },
+  { id: 'Provincial', label: 'Provincial', icon: '🔷' },
+  { id: 'Bancaribe', label: 'Bancaribe', icon: '🟠' },
+];
+
 export default function App() {
+  const [tradeType, setTradeType] = useState('BUY'); // 'BUY' = Comprar dólares, 'SELL' = Vender dólares
+  const [selectedMethod, setSelectedMethod] = useState('PagoMovil');
   const [selectedTier, setSelectedTier] = useState('20');
   const [marketData, setMarketData] = useState(null);
+  const [bcvData, setBcvData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [errorMsg, setErrorMsg] = useState(null);
 
-  const fetchMarketSignal = async (tier) => {
+  // Consultar datos de Binance P2P
+  const fetchMarketSignal = async () => {
     try {
-      setErrorMsg(null);
-      const { data, error } = await supabase.rpc('get_market_signal', {
-        target_tier: `${tier}usd`
+      // Intentar primero RPC V2 con parámetros de tradeType y payMethod
+      const { data: v2Data, error: errV2 } = await supabase.rpc('get_market_signal_v2', {
+        target_tier: `${selectedTier}usd`,
+        target_trade_type: tradeType,
+        target_pay_method: selectedMethod
       });
 
-      if (error) {
-        throw error;
+      if (!errV2 && v2Data && v2Data.current_rate !== null) {
+        setMarketData(v2Data);
+        return;
       }
 
-      if (data) {
-        setMarketData(data);
+      // Fallback a consulta directa de tabla si la RPC V2 aún no está migrada en Supabase
+      const { data: directData, error: directErr } = await supabase
+        .from('p2p_ticks')
+        .select('*')
+        .eq('trade_type', tradeType)
+        .eq('pay_method', selectedMethod)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (!directErr && directData && directData.length > 0) {
+        const item = directData[0];
+        const rate = Number(item[`rate_${selectedTier}usd`]) || item.market_avg;
+        setMarketData({
+          current_rate: rate,
+          min_today: rate * 0.99,
+          max_today: rate * 1.01,
+          avg_today: rate,
+          avg_last_4h: rate,
+          diff_percent: 0,
+          signal: 'YELLOW',
+          trade_type: tradeType,
+          pay_method: selectedMethod
+        });
+        return;
+      }
+
+      // Consulta de fallback V1 clásica
+      const { data: v1Data } = await supabase.rpc('get_market_signal', {
+        target_tier: `${selectedTier}usd`
+      });
+      if (v1Data) {
+        setMarketData(v1Data);
       }
     } catch (err) {
-      console.warn("No se pudo conectar a Supabase, mostrando datos de demostración si aplica:", err.message);
-      // Datos de demostración de contingencia si Supabase aún no está conectado
-      setMarketData(prev => prev || {
-        current_rate: 966.00,
-        min_today: 955.00,
-        avg_today: 958.50,
-        avg_last_4h: 962.00,
-        diff_percent: 0.42,
-        signal: 'YELLOW',
-        is_demo: true
-      });
+      console.warn('Error consultando señal:', err.message);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    setLoading(true);
-    fetchMarketSignal(selectedTier);
+  // Consultar tasas oficiales BCV (Dólar y Euro)
+  const fetchBcvRates = async () => {
+    try {
+      // 1. Intentar desde tabla bcv_rates en Supabase
+      const { data, error } = await supabase
+        .from('bcv_rates')
+        .select('*')
+        .order('updated_at', { ascending: false })
+        .limit(1);
 
-    // Actualización automática cada 60 segundos
-    const timer = setInterval(() => {
-      fetchMarketSignal(selectedTier);
-    }, 60000);
+      if (!error && data && data.length > 0) {
+        setBcvData(data[0]);
+        return;
+      }
 
-    return () => clearInterval(timer);
-  }, [selectedTier]);
-
-  const handleManualRefresh = () => {
-    setIsRefreshing(true);
-    fetchMarketSignal(selectedTier);
-  };
-
-  const getSignalMeta = (signal) => {
-    switch (signal) {
-      case 'GREEN':
-        return {
-          bgColor: '#065f46',
-          borderColor: '#10b981',
-          badgeText: 'MOMENTO ÓPTIMO PARA COMPRAR',
-          desc: 'La tasa está en los niveles más bajos de la jornada.'
-        };
-      case 'RED':
-        return {
-          bgColor: '#7f1d1d',
-          borderColor: '#ef4444',
-          badgeText: 'PRECIO ELEVADO',
-          desc: 'La tasa está por encima de la media reciente. Si puedes, espera.'
-        };
-      case 'YELLOW':
-      default:
-        return {
-          bgColor: '#78350f',
-          borderColor: '#f59e0b',
-          badgeText: 'PRECIO EN RANGO PROMEDIO',
-          desc: 'Comportamiento regular acorde a la media del día.'
-        };
+      // 2. Fallback directo a dolarvzla.com público
+      const res = await fetch('https://rates.dolarvzla.com/bcv/current.json');
+      if (res.ok) {
+        const json = await res.json();
+        if (json && json.current) {
+          setBcvData({
+            rate_usd: json.current.usd,
+            rate_eur: json.current.eur,
+            change_usd: json.changePercentage?.usd || 0,
+            change_eur: json.changePercentage?.eur || 0
+          });
+        }
+      }
+    } catch (err) {
+      console.warn('Error obteniendo BCV:', err.message);
     }
   };
 
-  const signalMeta = getSignalMeta(marketData?.signal);
+  useEffect(() => {
+    fetchBcvRates();
+  }, []);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchMarketSignal();
+
+    const interval = setInterval(() => {
+      fetchMarketSignal();
+      fetchBcvRates();
+    }, 60000);
+
+    return () => clearInterval(interval);
+  }, [selectedTier, selectedMethod, tradeType]);
+
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    fetchMarketSignal();
+    fetchBcvRates();
+  };
+
+  // Metadatos y textos del semáforo adaptados a COMPRA vs VENTA
+  const getSignalMeta = () => {
+    const isBuy = tradeType === 'BUY';
+    const sig = marketData?.signal || 'YELLOW';
+
+    if (sig === 'GREEN') {
+      return {
+        bg: '#064e3b',
+        border: '#10b981',
+        title: isBuy ? '¡MOMENTO ÓPTIMO PARA COMPRAR!' : '¡MOMENTO ÓPTIMO PARA VENDER!',
+        desc: isBuy
+          ? 'El dólar bajó de precio. Pagas menos Bolívares por USDT.'
+          : 'La tasa está en su punto más alto. Te pagan más Bolívares por USDT.'
+      };
+    }
+
+    if (sig === 'RED') {
+      return {
+        bg: '#7f1d1d',
+        border: '#ef4444',
+        title: isBuy ? 'PRECIO ELEVADO (ESPERAR)' : 'TASA BAJA (ESPERAR)',
+        desc: isBuy
+          ? 'El dólar está caro frente a la media. Si puedes, espera a que baje.'
+          : 'La tasa de venta está baja frente a la media. Conviene esperar un mejor precio.'
+      };
+    }
+
+    return {
+      bg: '#78350f',
+      border: '#f59e0b',
+      title: 'PRECIO EN RANGO PROMEDIO',
+      desc: 'Comportamiento normal acorde a la media del día.'
+    };
+  };
+
+  const signalMeta = getSignalMeta();
   const currentRate = Number(marketData?.current_rate || 0);
-  const totalBs = currentRate * Number(selectedTier);
+  const tierNumber = Number(selectedTier);
+  const totalBsP2P = currentRate * tierNumber;
+
+  // Comparativas con el Banco Central de Venezuela
+  const bcvUsd = Number(bcvData?.rate_usd || 807.38);
+  const bcvEur = Number(bcvData?.rate_eur || 938.44);
+  const totalBsBCV = bcvUsd * tierNumber;
+  const brechaBCV = currentRate > 0 && bcvUsd > 0 ? (((currentRate - bcvUsd) / bcvUsd) * 100).toFixed(1) : null;
 
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar barStyle="light-content" backgroundColor="#0b0f19" />
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.container}>
-          
+
           {/* Encabezado */}
           <View style={styles.header}>
             <Text style={styles.brandTitle}>Monitor P2P Binance</Text>
             <Text style={styles.brandSubtitle}>Venezuela (VES / USDT) • En tiempo real</Text>
           </View>
 
-          {/* Selector de Montos (Tiers) */}
+          {/* Selector de Modo: COMPRAR vs VENDER */}
+          <View style={styles.tradeTypeContainer}>
+            <TouchableOpacity
+              style={[styles.tradeTypeTab, tradeType === 'BUY' && styles.tradeTypeTabBuyActive]}
+              onPress={() => setTradeType('BUY')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.tradeTypeText, tradeType === 'BUY' && styles.tradeTypeTextActive]}>
+                🛒 Quiero Comprar USDT
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.tradeTypeTab, tradeType === 'SELL' && styles.tradeTypeTabSellActive]}
+              onPress={() => setTradeType('SELL')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.tradeTypeText, tradeType === 'SELL' && styles.tradeTypeTextActive]}>
+                💵 Quiero Vender USDT
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Selector Horizontal de Métodos / Bancos */}
+          <View style={styles.methodsWrapper}>
+            <Text style={styles.sectionLabel}>Selecciona el Método o Banco:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.methodsScroll}>
+              {PAY_METHODS.map((m) => {
+                const isSelected = selectedMethod === m.id;
+                return (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[styles.methodPill, isSelected && styles.methodPillActive]}
+                    onPress={() => setSelectedMethod(m.id)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.methodIcon}>{m.icon}</Text>
+                    <Text style={[styles.methodLabel, isSelected && styles.methodLabelActive]}>
+                      {m.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Selector de Monto (Tiers) */}
           <View style={styles.tierSection}>
-            <Text style={styles.sectionLabel}>Selecciona el monto en dólares a cambiar:</Text>
+            <Text style={styles.sectionLabel}>Monto a {tradeType === 'BUY' ? 'comprar' : 'vender'}:</Text>
             <View style={styles.tierRow}>
               {TIERS.map((tier) => {
                 const isSelected = selectedTier === tier;
@@ -141,100 +273,102 @@ export default function App() {
             </View>
           </View>
 
-          {/* Tarjeta de Estado y Semáforo */}
+          {/* Tarjeta de Semáforo Inteligente */}
+          <View style={[styles.signalCard, { backgroundColor: signalMeta.bg, borderColor: signalMeta.border }]}>
+            <View style={[styles.signalDot, { backgroundColor: signalMeta.border }]} />
+            <View style={styles.signalContent}>
+              <Text style={styles.signalTitle}>{signalMeta.title}</Text>
+              <Text style={styles.signalDesc}>{signalMeta.desc}</Text>
+            </View>
+          </View>
+
+          {/* Tarjeta Principal de Tasa P2P */}
           {loading && !marketData ? (
             <View style={styles.loadingBox}>
               <ActivityIndicator size="large" color="#38bdf8" />
-              <Text style={styles.loadingText}>Consultando mejores ofertas...</Text>
+              <Text style={styles.loadingText}>Consultando libro de órdenes en vivo...</Text>
             </View>
           ) : (
-            <View style={styles.cardWrapper}>
-              
-              {/* Semáforo Visual */}
-              <View style={[styles.signalCard, { backgroundColor: signalMeta.bgColor, borderColor: signalMeta.borderColor }]}>
-                <View style={[styles.signalDot, { backgroundColor: signalMeta.borderColor }]} />
-                <View style={styles.signalContent}>
-                  <Text style={styles.signalBadge}>{signalMeta.badgeText}</Text>
-                  <Text style={styles.signalDesc}>{signalMeta.desc}</Text>
-                </View>
-              </View>
+            <View style={styles.rateCard}>
+              <Text style={styles.rateHeaderLabel}>
+                {tradeType === 'BUY' ? 'Mejor tasa de compra para' : 'Mejor tasa de venta para'} ${selectedTier} en{' '}
+                {PAY_METHODS.find((m) => m.id === selectedMethod)?.label}
+              </Text>
 
-              {/* Tarjeta Principal de Conversión */}
-              <View style={styles.rateCard}>
-                <Text style={styles.rateLabel}>Mejor tasa para ${selectedTier} USDT</Text>
-                <View style={styles.rateNumberRow}>
-                  <Text style={styles.rateBigValue}>
-                    {currentRate > 0 ? currentRate.toFixed(2) : '---'}
-                  </Text>
-                  <Text style={styles.rateUnit}>Bs / USDT</Text>
-                </View>
-
-                <View style={styles.separator} />
-
-                <Text style={styles.receiveLabel}>Monto total que recibirás:</Text>
-                <Text style={styles.receiveTotal}>
-                  {totalBs > 0
-                    ? totalBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    : '---'}{' '}
-                  <Text style={styles.currencyBs}>Bs.</Text>
+              <View style={styles.rateNumberRow}>
+                <Text style={styles.rateBigValue}>
+                  {currentRate > 0 ? currentRate.toFixed(2) : '---'}
                 </Text>
-
-                {marketData?.diff_percent !== undefined && (
-                  <View style={styles.diffBadge}>
-                    <Text style={[styles.diffText, { color: marketData.diff_percent <= 0 ? '#34d399' : '#f87171' }]}>
-                      {marketData.diff_percent > 0 ? `+${marketData.diff_percent}%` : `${marketData.diff_percent}%`} vs media de 4h
-                    </Text>
-                  </View>
-                )}
+                <Text style={styles.rateUnit}>Bs / USDT</Text>
               </View>
 
-              {/* Tarjeta de Referencias del Día */}
-              <View style={styles.referenceCard}>
-                <View style={styles.refItem}>
-                  <Text style={styles.refLabel}>Mínimo de hoy</Text>
-                  <Text style={styles.refValue}>
-                    {marketData?.min_today ? `${Number(marketData.min_today).toFixed(2)} Bs` : '---'}
-                  </Text>
-                </View>
-                <View style={styles.refDividerVertical} />
-                <View style={styles.refItem}>
-                  <Text style={styles.refLabel}>Promedio de hoy</Text>
-                  <Text style={styles.refValue}>
-                    {marketData?.avg_today ? `${Number(marketData.avg_today).toFixed(2)} Bs` : '---'}
-                  </Text>
-                </View>
-              </View>
+              <View style={styles.separator} />
 
-              {/* Botón de Actualización */}
-              <TouchableOpacity
-                style={styles.refreshBtn}
-                onPress={handleManualRefresh}
-                disabled={isRefreshing}
-                activeOpacity={0.8}
-              >
-                {isRefreshing ? (
-                  <ActivityIndicator size="small" color="#ffffff" />
-                ) : (
-                  <Text style={styles.refreshBtnText}>🔄 Actualizar Tasa</Text>
-                )}
-              </TouchableOpacity>
-
-              {marketData?.is_demo && (
-                <Text style={styles.demoNotice}>
-                  * Conecta tus credenciales de Supabase en .env para ver datos en vivo.
-                </Text>
-              )}
-
+              <Text style={styles.receiveLabel}>
+                {tradeType === 'BUY' ? 'Total en Bolívares a pagar:' : 'Total en Bolívares a recibir:'}
+              </Text>
+              <Text style={styles.receiveTotal}>
+                {totalBsP2P > 0
+                  ? totalBsP2P.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                  : '---'}{' '}
+                <Text style={styles.currencyBs}>Bs.</Text>
+              </Text>
             </View>
           )}
 
-          {/* Pie de página con métodos de pago evaluados */}
-          <View style={styles.footerMethods}>
-            <Text style={styles.footerMethodsTitle}>Métodos evaluados:</Text>
-            <Text style={styles.footerMethodsList}>
-              Pago Móvil • Banesco • Banco de Venezuela • Mercantil • BNC • Bancaribe
-            </Text>
+          {/* Módulo Comparativo: Tasas Oficiales Banco Central de Venezuela (BCV & Euro) */}
+          <View style={styles.bcvBox}>
+            <View style={styles.bcvBoxHeader}>
+              <Text style={styles.bcvBoxTitle}>🏛️ Tasas Oficiales BCV (dolarvzla.com)</Text>
+              {brechaBCV && (
+                <View style={styles.brechaBadge}>
+                  <Text style={styles.brechaText}>Brecha: +{brechaBCV}%</Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.bcvGrid}>
+              {/* Columna Dólar BCV */}
+              <View style={styles.bcvCol}>
+                <Text style={styles.bcvCurrencyLabel}>DÓLAR BCV (USD)</Text>
+                <Text style={styles.bcvRateValue}>{bcvUsd.toFixed(2)} Bs</Text>
+                <Text style={styles.bcvEquiv}>
+                  ${selectedTier} equivalen a:{' '}
+                  <Text style={styles.bcvEquivBold}>
+                    {totalBsBCV.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Bs
+                  </Text>
+                </Text>
+              </View>
+
+              <View style={styles.bcvColDivider} />
+
+              {/* Columna Euro BCV */}
+              <View style={styles.bcvCol}>
+                <Text style={styles.bcvCurrencyLabel}>EURO BCV (EUR)</Text>
+                <Text style={styles.bcvRateValue}>{bcvEur.toFixed(2)} Bs</Text>
+                <Text style={styles.bcvEquiv}>
+                  En Euros aprox:{' '}
+                  <Text style={styles.bcvEquivBold}>
+                    {bcvEur > 0 ? (totalBsP2P / bcvEur).toFixed(2) : '---'} €
+                  </Text>
+                </Text>
+              </View>
+            </View>
           </View>
+
+          {/* Botón de Actualizar */}
+          <TouchableOpacity
+            style={styles.refreshBtn}
+            onPress={handleRefresh}
+            disabled={isRefreshing}
+            activeOpacity={0.8}
+          >
+            {isRefreshing ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Text style={styles.refreshBtnText}>🔄 Actualizar Tasas</Text>
+            )}
+          </TouchableOpacity>
 
         </View>
       </ScrollView>
@@ -252,39 +386,105 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: 'center',
     width: '100%',
-    paddingVertical: 20,
+    paddingVertical: 18,
   },
   container: {
     width: '100%',
-    maxWidth: 460, // Limita el ancho en navegadores de PC para mantener vista limpia de app móvil
-    paddingHorizontal: 20,
+    maxWidth: 480,
+    paddingHorizontal: 16,
     alignItems: 'center',
   },
   header: {
     alignItems: 'center',
-    marginBottom: 24,
-    marginTop: Platform.OS === 'web' ? 10 : 0,
+    marginBottom: 16,
+    marginTop: Platform.OS === 'web' ? 8 : 0,
   },
   brandTitle: {
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: '900',
     color: '#f8fafc',
     letterSpacing: 0.5,
   },
   brandSubtitle: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#94a3b8',
     marginTop: 4,
   },
-  tierSection: {
+  tradeTypeContainer: {
+    flexDirection: 'row',
     width: '100%',
-    marginBottom: 20,
+    backgroundColor: '#131c2e',
+    borderRadius: 14,
+    padding: 4,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+  },
+  tradeTypeTab: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    borderRadius: 10,
+  },
+  tradeTypeTabBuyActive: {
+    backgroundColor: '#0284c7',
+  },
+  tradeTypeTabSellActive: {
+    backgroundColor: '#059669',
+  },
+  tradeTypeText: {
+    color: '#94a3b8',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  tradeTypeTextActive: {
+    color: '#ffffff',
+  },
+  methodsWrapper: {
+    width: '100%',
+    marginBottom: 16,
   },
   sectionLabel: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#cbd5e1',
-    marginBottom: 10,
     fontWeight: '600',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  methodsScroll: {
+    paddingVertical: 2,
+  },
+  methodPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#131c2e',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    marginRight: 8,
+    borderWidth: 1.5,
+    borderColor: '#1e293b',
+  },
+  methodPillActive: {
+    borderColor: '#38bdf8',
+    backgroundColor: '#0f2744',
+  },
+  methodIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  methodLabel: {
+    color: '#94a3b8',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  methodLabelActive: {
+    color: '#38bdf8',
+  },
+  tierSection: {
+    width: '100%',
+    marginBottom: 14,
   },
   tierRow: {
     flexDirection: 'row',
@@ -292,14 +492,14 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   tierButton: {
-    backgroundColor: '#1e293b',
-    paddingVertical: 12,
+    backgroundColor: '#131c2e',
+    paddingVertical: 10,
     flex: 1,
     marginHorizontal: 3,
-    borderRadius: 12,
+    borderRadius: 10,
     alignItems: 'center',
     borderWidth: 1.5,
-    borderColor: '#334155',
+    borderColor: '#1e293b',
   },
   tierButtonActive: {
     backgroundColor: '#0284c7',
@@ -307,85 +507,71 @@ const styles = StyleSheet.create({
   },
   tierButtonText: {
     color: '#94a3b8',
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
   },
   tierButtonTextActive: {
     color: '#ffffff',
   },
-  cardWrapper: {
-    width: '100%',
-    alignItems: 'center',
-  },
-  loadingBox: {
-    paddingVertical: 60,
-    alignItems: 'center',
-  },
-  loadingText: {
-    color: '#94a3b8',
-    marginTop: 12,
-    fontSize: 14,
-  },
   signalCard: {
     width: '100%',
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
+    padding: 14,
     borderRadius: 14,
     borderWidth: 1.5,
-    marginBottom: 16,
+    marginBottom: 14,
   },
   signalDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    marginRight: 14,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 12,
   },
   signalContent: {
     flex: 1,
   },
-  signalBadge: {
+  signalTitle: {
     color: '#ffffff',
     fontSize: 13,
     fontWeight: '800',
-    letterSpacing: 0.4,
+    letterSpacing: 0.3,
   },
   signalDesc: {
     color: '#f1f5f9',
-    fontSize: 12,
+    fontSize: 11,
     marginTop: 2,
-    lineHeight: 16,
+    lineHeight: 15,
   },
   rateCard: {
     width: '100%',
     backgroundColor: '#131c2e',
     borderRadius: 16,
-    padding: 24,
+    padding: 20,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#1e293b',
     marginBottom: 14,
   },
-  rateLabel: {
-    fontSize: 13,
+  rateHeaderLabel: {
+    fontSize: 12,
     color: '#94a3b8',
     fontWeight: '600',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    textAlign: 'center',
   },
   rateNumberRow: {
     flexDirection: 'row',
     alignItems: 'baseline',
     marginTop: 6,
-    marginBottom: 10,
+    marginBottom: 6,
   },
   rateBigValue: {
-    fontSize: 42,
+    fontSize: 38,
     fontWeight: '900',
     color: '#38bdf8',
   },
   rateUnit: {
-    fontSize: 16,
+    fontSize: 15,
     color: '#94a3b8',
     fontWeight: '600',
     marginLeft: 8,
@@ -394,67 +580,94 @@ const styles = StyleSheet.create({
     height: 1,
     width: '100%',
     backgroundColor: '#1e293b',
-    marginVertical: 14,
+    marginVertical: 12,
   },
   receiveLabel: {
-    fontSize: 13,
+    fontSize: 12,
     color: '#cbd5e1',
     fontWeight: '500',
   },
   receiveTotal: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: '800',
     color: '#f8fafc',
-    marginTop: 4,
+    marginTop: 2,
   },
   currencyBs: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#38bdf8',
     fontWeight: '700',
   },
-  diffBadge: {
-    marginTop: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 8,
-    backgroundColor: '#0f172a',
-  },
-  diffText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  referenceCard: {
+  bcvBox: {
     width: '100%',
-    backgroundColor: '#131c2e',
+    backgroundColor: '#0f172a',
     borderRadius: 14,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-    flexDirection: 'row',
-    justifyContent: 'space-around',
     borderWidth: 1,
     borderColor: '#1e293b',
-    marginBottom: 20,
+    padding: 14,
+    marginBottom: 16,
   },
-  refItem: {
+  bcvBoxHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 12,
+  },
+  bcvBoxTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#cbd5e1',
+  },
+  brechaBadge: {
+    backgroundColor: '#1e293b',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  brechaText: {
+    color: '#f59e0b',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  bcvGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  bcvCol: {
     flex: 1,
   },
-  refDividerVertical: {
+  bcvColDivider: {
     width: 1,
     backgroundColor: '#1e293b',
-    marginHorizontal: 10,
+    marginHorizontal: 12,
   },
-  refLabel: {
-    fontSize: 11,
+  bcvCurrencyLabel: {
+    fontSize: 10,
     color: '#64748b',
-    fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  refValue: {
-    fontSize: 15,
-    color: '#cbd5e1',
     fontWeight: '700',
-    marginTop: 4,
+  },
+  bcvRateValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#f8fafc',
+    marginVertical: 2,
+  },
+  bcvEquiv: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  bcvEquivBold: {
+    color: '#38bdf8',
+    fontWeight: '700',
+  },
+  loadingBox: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#94a3b8',
+    marginTop: 10,
+    fontSize: 13,
   },
   refreshBtn: {
     width: '100%',
@@ -462,38 +675,11 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#0284c7',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
+    marginBottom: 20,
   },
   refreshBtnText: {
     color: '#ffffff',
     fontSize: 15,
     fontWeight: '700',
-  },
-  demoNotice: {
-    color: '#64748b',
-    fontSize: 11,
-    marginTop: 12,
-    textAlign: 'center',
-  },
-  footerMethods: {
-    marginTop: 30,
-    alignItems: 'center',
-  },
-  footerMethodsTitle: {
-    fontSize: 11,
-    color: '#475569',
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  footerMethodsList: {
-    fontSize: 11,
-    color: '#64748b',
-    textAlign: 'center',
-    lineHeight: 16,
   },
 });
