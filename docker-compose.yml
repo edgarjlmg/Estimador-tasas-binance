@@ -7,3 +7,12 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
+
+  extractor:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: estimador-binance-extractor
+    env_file:
+      - ./worker/.env
+    restart: unless-stopped
