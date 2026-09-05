@@ -110,7 +110,11 @@ async function fetchAndStoreP2P(methodId, tradeType) {
       const json = await response.json();
       const rawAds = json.data || [];
 
-      // Filtrar anuncios activos
+      // Filtrar anuncios que REALMENTE pueden cubrir el monto exacto solicitado
+      // Replica la misma validacion que hace la app de Binance al ingresar un monto especifico:
+      // 1. El vendedor tiene saldo suficiente (surplusUsdt >= usd)
+      // 2. El monto en VES cabe dentro del limite maximo dinamico del anuncio (dynMax >= usd * price)
+      // 3. El monto en VES supera el minimo del anuncio
       const qualified = rawAds
         .map(item => ({
           nickName: item.advertiser?.nickName || 'Comerciante',
@@ -121,17 +125,22 @@ async function fetchAndStoreP2P(methodId, tradeType) {
           maxVes: parseFloat(item.adv.dynamicMaxSingleTransAmount || item.adv.maxSingleTransAmount),
           surplusUsdt: parseFloat(item.adv.surplusAmount)
         }))
-        .filter(a => a.price > 0 && !isNaN(a.price));
+        .filter(a => {
+          if (a.price <= 0 || isNaN(a.price)) return false;
+          const requiredVes = usd * a.price;
+          // El anuncio debe poder cubrir el monto exacto en USDT y en VES
+          return a.surplusUsdt >= usd && requiredVes >= a.minVes && requiredVes <= a.maxVes;
+        });
 
       if (qualified.length > 0) {
-        // En BUY el primer anuncio de Binance es la tasa más baja que acepta ese monto
-        // En SELL el primer anuncio de Binance es la tasa más alta que paga por ese monto
+        // En BUY el primer anuncio es la tasa más baja que acepta el monto exacto
+        // En SELL el primer anuncio es la tasa más alta que paga por el monto exacto
         const bestAd = qualified[0];
         tierResults[`rate_${usd}usd`] = bestAd.price;
         lastKnownRate = bestAd.price;
         allPrices.push(bestAd.price);
 
-        // Guardamos los 3 primeros comerciantes para este monto
+        // Guardamos los 3 primeros comerciantes que SÍ pueden cumplir este monto exacto
         topTradersMap[`${usd}usd`] = qualified.slice(0, 3).map(t => ({
           nickName: t.nickName,
           price: t.price,
