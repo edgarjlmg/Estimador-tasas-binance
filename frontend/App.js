@@ -42,6 +42,7 @@ export default function App() {
   const [showComparison, setShowComparison] = useState(true); // Control desplegable de la comparativa de rentabilidad
   const [showSignalStats, setShowSignalStats] = useState(false); // Desplegable de máximos y mínimos con sus horas
   const [historicalTicks, setHistoricalTicks] = useState([]); // Historial de cotizaciones recientes para análisis de extremos
+  const [dailyStats, setDailyStats] = useState({}); // { 'Mercantil': { minRate, maxRate, minHour, maxHour, count } }
 
   // Conmutar selección múltiple de métodos (permite deseleccionar todos)
   const toggleMethod = (methodId) => {
@@ -62,23 +63,27 @@ export default function App() {
     });
   };
 
-  // Consultar datos de Binance P2P para todos los métodos seleccionados simultáneamente
+  // Calcula el inicio del día en Venezuela (UTC-4) como string ISO para filtrar BD
+  const getDayStartVE = () => {
+    const now = new Date();
+    // Obtener fecha actual en Venezuela
+    const veStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Caracas' }); // 'YYYY-MM-DD'
+    // Medianoche Venezuela en UTC = medianoche VE + 4h
+    return `${veStr}T04:00:00.000Z`;
+  };
+
+  // Consultar datos de Binance P2P: últimos ticks por método + extremos del día completo
   const fetchAllMarketData = async () => {
     try {
-      const [latestRes, historyRes] = await Promise.all([
-        supabase
-          .from('p2p_ticks')
-          .select('*')
-          .eq('trade_type', tradeType)
-          .order('created_at', { ascending: false })
-          .limit(40),
-        supabase
-          .from('p2p_ticks')
-          .select('rate_5usd, rate_20usd, rate_50usd, rate_100usd, rate_300usd, market_avg, pay_method, trade_type, created_at')
-          .eq('trade_type', tradeType)
-          .order('created_at', { ascending: false })
-          .limit(200)
-      ]);
+      const dayStart = getDayStartVE();
+
+      // Consulta 1: últimos ticks de cada método (para mostrar la tasa actual)
+      const latestRes = await supabase
+        .from('p2p_ticks')
+        .select('*')
+        .eq('trade_type', tradeType)
+        .order('created_at', { ascending: false })
+        .limit(40);
 
       if (!latestRes.error && latestRes.data) {
         const latestByMethod = {};
@@ -91,8 +96,55 @@ export default function App() {
         setLastDataTime(Date.now());
       }
 
-      if (!historyRes.error && historyRes.data) {
+      // Consulta 2: TODOS los ticks del día de HOY para el método activo (para extremos reales)
+      // Se hace por método específico para no mezclar datos y traer solo los necesarios
+      const historyRes = await supabase
+        .from('p2p_ticks')
+        .select('rate_5usd, rate_20usd, rate_50usd, rate_100usd, rate_300usd, market_avg, pay_method, trade_type, created_at')
+        .eq('trade_type', tradeType)
+        .eq('pay_method', activeTabMethod)
+        .gte('created_at', dayStart)
+        .order('created_at', { ascending: true });
+
+      if (!historyRes.error && historyRes.data && historyRes.data.length > 0) {
         setHistoricalTicks(historyRes.data);
+
+        // Calcular extremos reales del día por cada tier
+        const formatHour = (isoStr) => {
+          if (!isoStr) return '--:--';
+          try {
+            return new Date(isoStr).toLocaleTimeString('es-VE', {
+              timeZone: 'America/Caracas',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: true
+            });
+          } catch (e) { return '--:--'; }
+        };
+
+        const tiers = ['5usd', '20usd', '50usd', '100usd', '300usd'];
+        const statsForMethod = { count: historyRes.data.length };
+
+        tiers.forEach((t) => {
+          const key = `rate_${t}`;
+          let minItem = null;
+          let maxItem = null;
+          historyRes.data.forEach((row) => {
+            const val = Number(row[key] || 0);
+            if (val > 0) {
+              if (!minItem || val < minItem.val) minItem = { val, created_at: row.created_at };
+              if (!maxItem || val > maxItem.val) maxItem = { val, created_at: row.created_at };
+            }
+          });
+          statsForMethod[t] = {
+            minRate: minItem ? minItem.val : 0,
+            minHour: minItem ? formatHour(minItem.created_at) : '--:--',
+            maxRate: maxItem ? maxItem.val : 0,
+            maxHour: maxItem ? formatHour(maxItem.created_at) : '--:--'
+          };
+        });
+
+        setDailyStats((prev) => ({ ...prev, [activeTabMethod]: statsForMethod }));
       }
     } catch (err) {
       console.warn('Error consultando métodos:', err.message);
@@ -177,7 +229,7 @@ export default function App() {
       clearInterval(interval);
       supabase.removeChannel(channel);
     };
-  }, [selectedTier, tradeType]);
+  }, [selectedTier, tradeType, activeTabMethod]);
 
   const handleRefresh = () => {
     setIsRefreshing(true);
@@ -250,130 +302,129 @@ export default function App() {
   const rawBrecha = currentRate > 0 && bcvUsd > 0 ? ((currentRate - bcvUsd) / bcvUsd) * 100 : 19.5;
   const brechaFormatted = rawBrecha.toFixed(1);
 
-  // Sistema de 7 Estados
+  // Sistema de señal basado en POSICIÓN REAL dentro del rango del día
+  // 0% = en el mínimo exacto del día, 100% = en el máximo exacto del día
   const getSevenStateSignal = () => {
     const isBuy = tradeType === 'BUY';
-    let score = 0;
+    const tierSuffix = `${selectedTier}usd`;
+    const methodDayStats = dailyStats[activeTabMethod]?.[tierSuffix];
 
-    if (isBuy) {
-      if (rawBrecha <= 18.0) score += 2;
-      else if (rawBrecha <= 19.2) score += 1;
-      else if (rawBrecha >= 21.5) score -= 2;
-      else if (rawBrecha >= 20.3) score -= 1;
-    } else {
-      if (rawBrecha >= 21.5) score += 2;
-      else if (rawBrecha >= 20.3) score += 1;
-      else if (rawBrecha <= 18.0) score -= 2;
-      else if (rawBrecha <= 19.2) score -= 1;
+    const minRate = methodDayStats?.minRate || 0;
+    const maxRate = methodDayStats?.maxRate || 0;
+    const rangeSpan = maxRate - minRate;
+
+    // Si no hay datos históricos del día, usar brecha BCV como fallback
+    if (!methodDayStats || rangeSpan < 0.1 || currentRate === 0) {
+      // Fallback: brecha BCV
+      const brechaScore = isBuy
+        ? (rawBrecha <= 18.5 ? 2 : rawBrecha <= 19.5 ? 1 : rawBrecha >= 21.0 ? -2 : rawBrecha >= 20.2 ? -1 : 0)
+        : (rawBrecha >= 21.0 ? 2 : rawBrecha >= 20.2 ? 1 : rawBrecha <= 18.5 ? -2 : rawBrecha <= 19.5 ? -1 : 0);
+      const scoreFallback = brechaScore;
+      return buildSignal(scoreFallback, isBuy, brechaFormatted, null, null, null);
     }
+
+    // Posición actual en el rango del día (0 = mínimo, 1 = máximo)
+    const posRaw = (currentRate - minRate) / rangeSpan;
+    const posPct = Math.max(0, Math.min(1, posRaw));
+    const barPct = Math.round(posPct * 100) + '%';
+
+    // Para COMPRAR: posición baja = buena señal (estás comprando barato)
+    // Para VENDER: posición alta = buena señal (te pagan más)
+    let score;
+    if (isBuy) {
+      if (posPct <= 0.15) score = 2;       // en el 0–15% inferior del día
+      else if (posPct <= 0.35) score = 1;  // en el 15–35%
+      else if (posPct <= 0.60) score = 0;  // en el 35–60% (promedio)
+      else if (posPct <= 0.80) score = -1; // en el 60–80%
+      else score = -2;                     // en el 80–100% (máximo del día)
+    } else {
+      if (posPct >= 0.85) score = 2;       // vendiendo cerca del máximo del día
+      else if (posPct >= 0.65) score = 1;
+      else if (posPct >= 0.40) score = 0;
+      else if (posPct >= 0.20) score = -1;
+      else score = -2;                     // vendiendo cerca del mínimo del día
+    }
+
+    return buildSignal(score, isBuy, brechaFormatted, posPct, minRate, maxRate, barPct);
+  };
+
+  const buildSignal = (score, isBuy, brechaFormatted, posPct, minRate, maxRate, barPct) => {
+    const pctLabel = posPct !== null ? ` (${Math.round(posPct * 100)}% del rango de hoy)` : '';
+    const rangeContext = minRate && maxRate
+      ? ` • Rango de hoy: ${minRate.toFixed(2)} – ${maxRate.toFixed(2)} Bs`
+      : '';
 
     switch (score) {
       case 2:
         return {
-          tag: isBuy ? '🌟 MOMENTO EXCELENTE (MUY BUENO)' : '🌟 MOMENTO EXCELENTE (PAGO MÁXIMO)',
+          tag: isBuy ? '🌟 MOMENTO EXCELENTE — COMPRANDO BARATO' : '🌟 MOMENTO EXCELENTE — PAGO MÁXIMO',
           bg: '#064e3b',
           border: '#10b981',
           text: '#34d399',
-          barPct: '100%',
+          barPct: barPct || '100%',
           desc: isBuy
-            ? `La tasa está en mínimos con brecha comprimida (+${brechaFormatted}% vs BCV). Oportunidad dorada para comprar.`
-            : `Pagan la tasa más alta del día (+${brechaFormatted}% sobre BCV). Excelente oportunidad para vender y asegurar bolívares.`
+            ? `Estás en la parte más baja del rango de hoy${rangeContext}. Brecha vs BCV: +${brechaFormatted}%. Oportunidad dorada.`
+            : `Te están pagando cerca del máximo del día${rangeContext}. Brecha: +${brechaFormatted}% sobre BCV.`
         };
       case 1:
         return {
-          tag: isBuy ? '✅ FAVORABLE / BUENO' : '✅ FAVORABLE / BUENO',
+          tag: isBuy ? '✅ FAVORABLE — POR DEBAJO DEL PROMEDIO' : '✅ FAVORABLE — SOBRE EL PROMEDIO',
           bg: '#065f46',
           border: '#059669',
           text: '#6ee7b7',
-          barPct: '80%',
+          barPct: barPct || '75%',
           desc: isBuy
-            ? 'La tasa está por debajo de la media reciente. Buen momento de entrada sin sobreprecio.'
-            : 'Cotización atractiva por encima del promedio diario. Momento recomendado para vender.'
+            ? `La tasa está en el cuartil inferior del día${rangeContext}. Brecha: +${brechaFormatted}% vs BCV.`
+            : `Cotización atractiva por encima del promedio diario${rangeContext}.`
         };
       case 0:
       default:
         return {
-          tag: '⚖️ PROMEDIO DEL DÍA (ESTABLE)',
+          tag: '⚖️ EN EL RANGO PROMEDIO DEL DÍA',
           bg: '#78350f',
           border: '#f59e0b',
           text: '#fcd34d',
-          barPct: '50%',
-          desc: `La paridad se mantiene en su rango habitual de mercado (+${brechaFormatted}% vs tasa oficial). Operación estándar.`
+          barPct: barPct || '50%',
+          desc: `La tasa está en la zona media del rango de hoy${rangeContext}. Brecha vs BCV: +${brechaFormatted}%. Operación estándar.`
         };
       case -1:
         return {
-          tag: isBuy ? '⚠️ REGULAR / DESFAVORABLE' : '⚠️ REGULAR / TASA BAJA',
+          tag: isBuy ? '⚠️ DESFAVORABLE — PRECIO ELEVADO HOY' : '⚠️ DESFAVORABLE — PAGO BAJO HOY',
           bg: '#7c2d12',
           border: '#ea580c',
           text: '#fdba74',
-          barPct: '30%',
+          barPct: barPct || '25%',
           desc: isBuy
-            ? 'La tasa muestra presión alcista preventiva. Si no tienes urgencia, conviene monitorear antes de cambiar.'
-            : 'Los compradores están ofertando por debajo del promedio. Conviene aguardar mayor liquidez.'
+            ? `La tasa está en el cuartil superior del día${rangeContext}. Si no es urgente, monitorea antes de comprar.`
+            : `Los compradores ofrecen por debajo del promedio hoy${rangeContext}. Aguarda mayor liquidez.`
         };
       case -2:
         return {
-          tag: isBuy ? '🛑 MUY MAL MOMENTO (PRECIO INFLADO)' : '🛑 MUY MAL MOMENTO (DESCUENTO EXCESIVO)',
+          tag: isBuy ? '🛑 MUY MAL MOMENTO — CERCA DEL MÁXIMO DE HOY' : '🛑 MUY MAL MOMENTO — CERCA DEL MÍNIMO DE HOY',
           bg: '#7f1d1d',
           border: '#ef4444',
           text: '#fca5a5',
-          barPct: '10%',
+          barPct: barPct || '5%',
           desc: isBuy
-            ? `Brecha inflada (+${brechaFormatted}% vs BCV) y cajeros defensivos. Comprar aquí genera pérdida cambiaria directa. ¡Espera!`
-            : `Están pagando muy pocos bolívares por dólar frente al costo de reposición. No vendas en este momento.`
+            ? `Estás comprando cerca del precio más caro del día${rangeContext}. Brecha: +${brechaFormatted}% vs BCV. ¡Espera si puedes!`
+            : `Pagan cerca del mínimo del día${rangeContext}. No vendas en este momento.`
         };
     }
   };
 
   const signalState = getSevenStateSignal();
 
-  // Cálculo de Máximos y Mínimos con sus horas para el método y monto actual
+  // Extremos del día para el método y tier activos (usando dailyStats, no historicalTicks)
   const getMethodHistoricalStats = () => {
-    // Filtrar ticks que coincidan con el método actual (o todos si no hay suficientes)
-    const matchingTicks = historicalTicks.filter((t) => t.pay_method === activeTabMethod);
-    const pool = matchingTicks.length >= 5 ? matchingTicks : historicalTicks;
-
-    if (!pool || pool.length === 0) {
-      return null;
-    }
-
-    let minItem = null;
-    let maxItem = null;
-    const key = tierKey;
-
-    pool.forEach((item) => {
-      const val = Number(item[key] || item.market_avg || 0);
-      if (val > 0) {
-        if (!minItem || val < minItem.val) {
-          minItem = { val, created_at: item.created_at };
-        }
-        if (!maxItem || val > maxItem.val) {
-          maxItem = { val, created_at: item.created_at };
-        }
-      }
-    });
-
-    const formatHour = (isoStr) => {
-      if (!isoStr) return '--:--';
-      try {
-        const d = new Date(isoStr);
-        return d.toLocaleTimeString('es-VE', {
-          timeZone: 'America/Caracas',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: true
-        });
-      } catch (e) {
-        return '--:--';
-      }
-    };
-
+    const tierSuffix = `${selectedTier}usd`;
+    const stats = dailyStats[activeTabMethod]?.[tierSuffix];
+    if (!stats || !stats.minRate || stats.minRate === 0) return null;
     return {
-      minRate: minItem ? minItem.val : currentRate,
-      minHour: minItem ? formatHour(minItem.created_at) : '--:--',
-      maxRate: maxItem ? maxItem.val : currentRate,
-      maxHour: maxItem ? formatHour(maxItem.created_at) : '--:--',
-      totalSamples: pool.length
+      minRate: stats.minRate,
+      minHour: stats.minHour,
+      maxRate: stats.maxRate,
+      maxHour: stats.maxHour,
+      totalSamples: dailyStats[activeTabMethod]?.count || 0
     };
   };
 
@@ -663,7 +714,10 @@ export default function App() {
             {showSignalStats && methodStats && (
               <View style={styles.signalExtremesBox}>
                 <Text style={styles.signalExtremesTitle}>
-                  📊 MOVIMIENTOS Y EXTREMOS REGISTRADOS HOY ({PAY_METHODS.find((m) => m.id === activeTabMethod)?.label} - ${selectedTier}):
+                  📊 EXTREMOS REALES DE HOY ({PAY_METHODS.find((m) => m.id === activeTabMethod)?.label} - ${selectedTier}):
+                </Text>
+                <Text style={{ color: '#94a3b8', fontSize: 10, marginBottom: 8, textAlign: 'center' }}>
+                  Calculado sobre {methodStats.totalSamples} capturas del día actual en Venezuela
                 </Text>
 
                 <View style={styles.signalExtremesGrid}>
