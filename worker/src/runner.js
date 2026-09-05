@@ -76,80 +76,86 @@ async function syncBcvRates() {
  */
 async function fetchAndStoreP2P(methodId, tradeType) {
   try {
-    const tierResults = {};
     const topTradersMap = {};
     let allPrices = [];
 
-    // Consultamos por cada monto objetivo enviando transAmount exactamente como la app de Binance
-    for (const usd of TARGET_AMOUNTS) {
-      const estimatedVes = Math.round(usd * lastKnownRate);
+    // Todas las consultas de monto se hacen EN PARALELO para maxima velocidad
+    const tierEntries = await Promise.all(
+      TARGET_AMOUNTS.map(async (usd) => {
+        const estimatedVes = Math.round(usd * lastKnownRate);
 
-      const payload = {
-        asset: 'USDT',
-        fiat: 'VES',
-        merchantCheck: false,
-        page: 1,
-        payTypes: [methodId],
-        publisherType: null, // null permite ver TODOS los anuncios reales que aparecen en la app de Binance
-        rows: 15,
-        tradeType: tradeType,
-        transAmount: String(estimatedVes) // Clave para obtener los anuncios reales y eliminar órdenes mayoristas incompatibles
-      };
+        const payload = {
+          asset: 'USDT',
+          fiat: 'VES',
+          merchantCheck: false,
+          page: 1,
+          payTypes: [methodId],
+          publisherType: null,
+          rows: 20,
+          tradeType: tradeType,
+          transAmount: String(estimatedVes)
+        };
 
-      const response = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) continue;
-
-      const json = await response.json();
-      const rawAds = json.data || [];
-
-      // Filtrar anuncios que REALMENTE pueden cubrir el monto exacto solicitado
-      // Replica la misma validacion que hace la app de Binance al ingresar un monto especifico:
-      // 1. El vendedor tiene saldo suficiente (surplusUsdt >= usd)
-      // 2. El monto en VES cabe dentro del limite maximo dinamico del anuncio (dynMax >= usd * price)
-      // 3. El monto en VES supera el minimo del anuncio
-      const qualified = rawAds
-        .map(item => ({
-          nickName: item.advertiser?.nickName || 'Comerciante',
-          monthOrderCount: item.advertiser?.monthOrderCount || 0,
-          finishRate: Math.round(((item.advertiser?.monthFinishRate ?? item.advertiser?.finishRate) || 0) * 100),
-          price: parseFloat(item.adv.price),
-          minVes: parseFloat(item.adv.minSingleTransAmount),
-          maxVes: parseFloat(item.adv.dynamicMaxSingleTransAmount || item.adv.maxSingleTransAmount),
-          surplusUsdt: parseFloat(item.adv.surplusAmount)
-        }))
-        .filter(a => {
-          if (a.price <= 0 || isNaN(a.price)) return false;
-          const requiredVes = usd * a.price;
-          // El anuncio debe poder cubrir el monto exacto en USDT y en VES
-          return a.surplusUsdt >= usd && requiredVes >= a.minVes && requiredVes <= a.maxVes;
+        const response = await fetch('https://p2p.binance.com/bapi/c2c/v2/friendly/c2c/adv/search', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          body: JSON.stringify(payload)
         });
 
-      if (qualified.length > 0) {
-        // En BUY el primer anuncio es la tasa más baja que acepta el monto exacto
-        // En SELL el primer anuncio es la tasa más alta que paga por el monto exacto
-        const bestAd = qualified[0];
-        tierResults[`rate_${usd}usd`] = bestAd.price;
-        lastKnownRate = bestAd.price;
-        allPrices.push(bestAd.price);
+        if (!response.ok) return { usd, rate: null, traders: [] };
 
-        // Guardamos los 3 primeros comerciantes que SÍ pueden cumplir este monto exacto
-        topTradersMap[`${usd}usd`] = qualified.slice(0, 3).map(t => ({
-          nickName: t.nickName,
-          price: t.price,
-          orders: t.monthOrderCount,
-          finishRate: `${t.finishRate}%`
-        }));
+        const json = await response.json();
+        const rawAds = json.data || [];
+
+        // Filtrar anuncios que REALMENTE pueden cubrir el monto exacto solicitado
+        // Replica la misma validacion de Binance al ingresar un monto especifico:
+        // 1. surplus >= usd: el vendedor tiene saldo suficiente
+        // 2. requiredVes <= dynMax: el monto exacto cabe en el limite maximo dinamico del anuncio
+        // 3. requiredVes >= minVes: el monto supera el minimo del anuncio
+        const qualified = rawAds
+          .map(item => ({
+            nickName: item.advertiser?.nickName || 'Comerciante',
+            monthOrderCount: item.advertiser?.monthOrderCount || 0,
+            finishRate: Math.round(((item.advertiser?.monthFinishRate ?? item.advertiser?.finishRate) || 0) * 100),
+            price: parseFloat(item.adv.price),
+            minVes: parseFloat(item.adv.minSingleTransAmount),
+            maxVes: parseFloat(item.adv.dynamicMaxSingleTransAmount || item.adv.maxSingleTransAmount),
+            surplusUsdt: parseFloat(item.adv.surplusAmount)
+          }))
+          .filter(a => {
+            if (a.price <= 0 || isNaN(a.price)) return false;
+            const requiredVes = usd * a.price;
+            return a.surplusUsdt >= usd && requiredVes >= a.minVes && requiredVes <= a.maxVes;
+          });
+
+        if (qualified.length === 0) return { usd, rate: null, traders: [] };
+
+        return {
+          usd,
+          rate: qualified[0].price,
+          traders: qualified.slice(0, 3).map(t => ({
+            nickName: t.nickName,
+            price: t.price,
+            orders: t.monthOrderCount,
+            finishRate: `${t.finishRate}%`
+          }))
+        };
+      })
+    );
+
+    const tierResults = {};
+    for (const entry of tierEntries) {
+      if (entry.rate !== null) {
+        tierResults[`rate_${entry.usd}usd`] = entry.rate;
+        topTradersMap[`${entry.usd}usd`] = entry.traders;
+        allPrices.push(entry.rate);
+        lastKnownRate = entry.rate; // actualizar referencia con la tasa mas reciente
       } else {
-        tierResults[`rate_${usd}usd`] = lastKnownRate;
-        topTradersMap[`${usd}usd`] = [];
+        tierResults[`rate_${entry.usd}usd`] = lastKnownRate;
+        topTradersMap[`${entry.usd}usd`] = [];
       }
     }
 
@@ -191,21 +197,27 @@ async function fetchAndStoreP2P(methodId, tradeType) {
   }
 }
 
+
 async function runAllCycles() {
   const t0 = Date.now();
-  console.log(`[${new Date().toISOString()}] Ejecutando ciclo de sondeo exacto Binance P2P & BCV...`);
+  console.log(`[${new Date().toISOString()}] Iniciando ciclo paralelo Binance P2P & BCV...`);
 
-  await syncBcvRates();
+  // BCV se sincroniza en paralelo con el P2P
+  const tasks = [syncBcvRates()];
 
+  // Todos los metodos y tipos de operacion se consultan EN PARALELO
   for (const m of PAY_METHODS) {
-    await fetchAndStoreP2P(m.id, 'BUY');
-    await fetchAndStoreP2P(m.id, 'SELL');
+    tasks.push(fetchAndStoreP2P(m.id, 'BUY'));
+    tasks.push(fetchAndStoreP2P(m.id, 'SELL'));
   }
+
+  await Promise.all(tasks);
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`[${new Date().toISOString()}] Ciclo completado en ${elapsed}s.`);
 }
 
-console.log('Iniciando Extractor V3 con transAmount exacto y Top 3 comerciantes...');
+console.log('Iniciando Extractor V4 (paralelo) - intervalo 20s...');
 runAllCycles();
-setInterval(runAllCycles, 60000);
+// Ciclo cada 20 segundos: datos frescos en menos de 3s de diferencia con Binance
+setInterval(runAllCycles, 20000);
