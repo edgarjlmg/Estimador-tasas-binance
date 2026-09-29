@@ -1,57 +1,31 @@
 # Estimador y Monitor de Tasas Binance P2P (VES/USDT)
 
-Sistema en tiempo real, automatizado y de costo cero (Free Tier) para el seguimiento de la tasa cambiaria de Binance P2P en Venezuela, con semáforo inteligente de oportunidad de compra y cálculo instantáneo por monto a cambiar.
+> ⚠️ **ESTADO:** Proyecto pausado / archivado en modo local para optimizar recursos en la nube. La documentación técnica completa, lógica de filtros y datos de muestra se encuentran en [`CONTEXTO_PROYECTO.md`](CONTEXTO_PROYECTO.md) y [`backup_datos/`](backup_datos/).
+
+Sistema automatizado para el seguimiento de la tasa cambiaria de Binance P2P en Venezuela (VES ⇄ USDT), segmentado por banco/método de pago y montos transaccionados ($5, $20, $50, $100, $300), contrastado con las tasas oficiales del Banco Central de Venezuela (BCV).
 
 ---
 
 ## 🚀 Componentes del Proyecto
 
-### 1. `supabase/` - Base de Datos y Métricas en Tiempo Real
-- **`schema.sql`**: Define la tabla `p2p_ticks`, índices de alta velocidad, políticas de seguridad RLS y la función SQL `get_market_signal(target_tier)`.
-- **`seed_test.sql`**: Ticks de prueba para inicializar métricas.
+### 1. `supabase/` - Base de Datos y Métricas
+- **`schema.sql`** / **`migracion_v2.sql`**: Esquemas de tablas (`p2p_ticks`, `bcv_rates`), índices compuestos por método/tipo de orden y funciones RPC para cálculo de métricas.
 
-### 2. `worker/` - Extractor Automático (Cloudflare Worker)
-- Extractor serverless con Cron Trigger cada 60 segundos (`* * * * *`).
-- Consulta la API P2P de Binance para VES/USDT con los métodos: `PagoMovil`, `Banesco`, `BancoDeVenezuela`, `Mercantil`, `BNC` y `Bancaribe`.
-- Evalúa el primer mejor postor para cubrir los montos de **$5, $20, $50, $100 y $300**.
-- Inserta los registros directamente en Supabase vía REST.
-- Incluye `local-runner.js` para validación local inmediata.
+### 2. `worker/` - Extractor Automático (Node.js / Railway / Cloudflare)
+- Extractor que consulta en paralelo mediante `Promise.all` las tasas de Binance P2P y BCV.
+- Implementa la **triple validación matemática idéntica a la app de Binance** (`surplusUsdt >= usd`, `requiredVes >= minVes`, `requiredVes <= dynamicMaxVes`).
+- `worker/src/runner.js`: Versión de sondeo continuo lista para correr en Railway o cualquier contenedor Node.js.
 
 ### 3. `frontend/` - Aplicación Universal (Web + Android APK)
 - Desarrollada con **React Native / Expo Universal**.
-- **Versión Web**: Exportable estáticamente a Vercel o Cloudflare Pages con diseño móvil centrado (`maxWidth: 480px`).
-- **Versión Android**: Compilable a archivo `.apk` mediante EAS Build (`eas.json`).
+- Soporte para operar tanto en Compra (BUY) como en Venta (SELL), selector de método de pago preferido, semáforo inteligente de oportunidad basado en el rango real del día (0-100%) y desglose de los 3 mejores comerciantes.
+
+### 4. `backup_datos/` - Respaldo Local de Información
+- `bcv_rates_sample.json`: Muestra histórica de tasas del BCV registradas.
+- `p2p_ticks_recientes.json`: Muestra de 1.000 capturas completas de ticks del mercado P2P.
 
 ---
 
-## 🛠️ Guía Rápida de Configuración
+## 🛠️ Para Reactivar en Local o en la Nube
 
-### Paso 1: Configurar Supabase
-1. Crea un proyecto gratuito en [Supabase](https://supabase.com).
-2. Ve al **SQL Editor** en Supabase, copia el contenido de [`supabase/schema.sql`](supabase/schema.sql) y ejecútalo.
-3. En la configuración de Supabase (**Project Settings -> API**), copia:
-   - **Project URL**
-   - **anon key** (para el frontend)
-   - **service_role key** (para el worker)
-
-### Paso 2: Desplegar el Extractor en Cloudflare Worker
-```bash
-cd worker
-npm install
-# Autenticarte en Cloudflare si aún no lo has hecho:
-npx wrangler login
-# Guardar la clave secreta de Supabase:
-npx wrangler secret put SUPABASE_SERVICE_ROLE_KEY
-# Desplegar:
-npm run deploy
-```
-
-### Paso 3: Ejecutar el Frontend Universal
-```bash
-cd frontend
-npm install
-# Iniciar en modo Web:
-npm run web
-# Compilar APK para Android:
-npx eas build -p android --profile preview
-```
+Consulta la sección detallada de reactivación en [`CONTEXTO_PROYECTO.md`](CONTEXTO_PROYECTO.md).
